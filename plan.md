@@ -2,7 +2,7 @@ Perfect — since you’re an engineer, you’ll want a minimal loop you can act
 
 ---
 
-# 🎯 Minimal MVP: Survival-Aware Draft Optimizer
+# 🎯 Minimal MVP: DP-Based Draft Optimizer with Survival Probabilities
 
 ### **Step 1. Data ingest**
 
@@ -16,7 +16,7 @@ Perfect — since you’re an engineer, you’ll want a minimal loop you can act
 
 ### **Step 2. Monte Carlo survival estimates**
 
-* Simulate the draft board **B times** (e.g. 1,000):
+* Simulate the draft board **B times** (10 for dev, 1000 for production):
 
   * Other teams pick stochastically, e.g. weighted by ESPN rank ± noise.
   * Track whether player $i$ survives to each of your picks $t_k$.
@@ -26,7 +26,7 @@ Perfect — since you’re an engineer, you’ll want a minimal loop you can act
   s_i(t_k) = \frac{1}{B}\sum_{b=1}^B \mathbf{1}\{i \text{ survives to } t_k\}
   $$
 
-Store as a `pandas.DataFrame` with columns: `player_id, pos, pick_number, survival_prob`.
+Store as a dict: `{(player_id, pick_number): survival_prob}`.
 
 **Libraries to use:**
 - **NumPy** for random generation and array operations
@@ -34,45 +34,54 @@ Store as a `pandas.DataFrame` with columns: `player_id, pos, pick_number, surviv
 
 ### **Step 3. Ladder EVs per position**
 
-For each position $p$, at each pick $t_k$:
+For each position $p$, at each pick $t_k$, for slot $u$ (the u-th player at that position):
 
 ```python
-def expected_value_ladder(players_p, survival_probs, t_k):
-    # players_p: sorted list of players at position p by projection
-    ev = 0
+def compute_ladder_ev(position_players, pick, slot, survival_probs):
+    # Skip first (slot-1) players for slot u
+    eligible = position_players[slot-1:]
+    
+    ev = 0.0
     prob_all_gone = 1.0
-    for player in players_p:
-        s = survival_probs[(player.id, t_k)]
-        ev += player.pts * s * prob_all_gone
+    
+    for player in eligible:
+        s = survival_probs.get((player['id'], pick), 0)
+        ev += player['fantasy_pts'] * s * prob_all_gone
         prob_all_gone *= (1 - s)
+    
     return ev
 ```
 
-This gives $E[V_p(t_k)]$, the expected best available if you take position $p$ at $t_k$.
+This gives $E[V_p^{(u)}(t_k)]$, the expected value of the u-th best available player at position $p$ at pick $t_k$.
 
 **Libraries to use:**
 - **pandas groupby** for position-based aggregations
 - **NumPy** for vectorized probability calculations
 
-### **Step 4. Compute deltas**
+### **Step 4. Dynamic Programming over Positions**
 
-At each pick $t_k$:
+Key insight: With only 48 reachable states (position counts) × 7 picks = 336 total states, we can solve globally optimal strategy:
 
-$$
-\Delta_p(k) = E[V_p(t_k)] - E[V_p(t_{k}^{(p,\text{next})})]
-$$
+**State representation**: `(k, rb_count, wr_count, qb_count, te_count)` where:
+- k ∈ [0,6] (pick index)  
+- rb_count ∈ [0,3], wr_count ∈ [0,2], qb_count ∈ [0,1], te_count ∈ [0,1]
 
-where $t_{k}^{(p,\text{next})}$ is your next pick where you might still need position $p$.
+**DP recurrence**:
+```python
+F(k, r, w, q, t) = max over valid positions p {
+    ladder_ev(p, pick_k, slot_u) + F(k+1, r', w', q', t')
+}
+```
+where slot_u = current count of position p + 1
+
+**Implementation**: Use backward induction from pick 7 to pick 1, with `@lru_cache` for memoization.
 
 ### **Step 5. Policy**
 
-* Maintain counts of how many of each slot you still need (1 QB, 3 RB, 2 WR, 1 TE).
-* At each pick:
-
-  1. Compute $\Delta_p(k)$ for each needed position.
-  2. Pick the position with max $\Delta_p(k)$.
-  3. From current board, select the surviving player at that position with the highest projection.
-* Update needs + board, repeat.
+The DP solution gives us the globally optimal position to draft at each pick:
+1. Run DP to build optimal value table
+2. At draft time, extract optimal position from DP table given current state
+3. Draft the best available player at that position
 
 ### **Step 6. Metrics**
 
@@ -82,47 +91,60 @@ where $t_{k}^{(p,\text{next})}$ is your next pick where you might still need pos
 
 ---
 
-# 🔧 Minimal Prototype Loop (pseudocode)
+# 🔧 Implementation Architecture (actual code structure)
 
 ```python
-needs = {"QB":1,"RB":3,"WR":2,"TE":1}
-my_picks = [5, 24, 33, 52, 61, 80, 89]  # 14-team snake example
+# dp_draft_optimizer.py (~200 lines total)
 
-for k, pick_no in enumerate(my_picks):
-    # 1. For each needed position compute EV now and EV at next
-    deltas = {}
-    for p in needs:
-        if needs[p] > 0:
-            ev_now  = expected_value_ladder(players[p], survival, pick_no)
-            ev_next = expected_value_ladder(players[p], survival, next_pick_for(p, k))
-            deltas[p] = ev_now - ev_next
+# Core DP solver with memoization
+@lru_cache(maxsize=1000)
+def dp_solve(k, rb_count, wr_count, qb_count, te_count):
+    # Base case: all picks made
+    if k >= len(MY_PICKS):
+        if is_complete_roster(rb_count, wr_count, qb_count, te_count):
+            return 0
+        return -float('inf')
+    
+    best_value = -float('inf')
+    
+    # Try each position
+    for position, (current, max_needed) in [
+        ('RB', (rb_count, 3)),
+        ('WR', (wr_count, 2)),
+        ('QB', (qb_count, 1)),
+        ('TE', (te_count, 1))
+    ]:
+        if current < max_needed:
+            slot = current + 1
+            ev = compute_ladder_ev(position, MY_PICKS[k], slot)
+            future = dp_solve(k+1, *update_counts(position))
+            best_value = max(best_value, ev + future)
+    
+    return best_value
 
-    # 2. Choose best position
-    chosen_pos = max(deltas, key=deltas.get)
-
-    # 3. Pick top surviving player in that position
-    chosen_player = top_available(chosen_pos, board, survival, pick_no)
-
-    # 4. Update state
-    draft(chosen_player)
-    needs[chosen_pos] -= 1
+# At draft time: extract optimal position
+def get_optimal_position(k, rb, wr, qb, te):
+    # Returns "RB", "WR", "QB", or "TE" based on DP solution
 ```
 
 ---
 
 # ✅ Why this is a good MVP
 
-* **Small surface area:** Only requires survival probs and projections (you already have both).
-* **Transparent math:** You can print EV ladders and deltas to see the “why”.
-* **Extendable:** Once this skeleton runs, you can plug in:
+* **Globally optimal:** DP finds the mathematically optimal strategy (not just greedy).
+* **Computationally tractable:** Only 48 states × 7 picks = 336 total states (runs in milliseconds).
+* **Transparent math:** You can print the ladder EVs and DP values to understand decisions.
+* **Validates theory:** Tests whether survival probabilities + DP actually improve draft outcomes.
 
-  * different opponent models in Monte Carlo
-  * Hungarian assignment (§6 in my earlier answer) to coordinate RB×3/WR×2
-  * LP planner for global optimization.
+## 🔑 Key Theoretical Insight
 
----
+The breakthrough is using **DP-over-positions** instead of DP-over-players:
+- **State space**: Only 48 possible roster configurations (QB/RB/WR/TE counts)
+- **Action space**: Only 4 choices per pick (which position to draft)
+- **Reward**: Survival-aware ladder EV for the next slot of that position
+- **Result**: Globally optimal position sequence that maximizes expected total points
 
-Would you like me to **write you an actual working Python module** (consuming your two CSVs and producing an example draft plan with deltas logged each pick) so you can run it end-to-end?
+This avoids the exponential complexity of considering all possible player combinations while still finding the optimal strategy.
 
 ---
 

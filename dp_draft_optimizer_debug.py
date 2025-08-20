@@ -9,12 +9,16 @@ from rapidfuzz import fuzz
 from functools import lru_cache
 from typing import Dict, List, Tuple, NamedTuple
 import itertools
+import argparse
+try:
+    from visualize_mc import create_simple_dashboard
+    VISUALIZATION_AVAILABLE = True
+except ImportError:
+    VISUALIZATION_AVAILABLE = False
 
 # Configuration
 SNAKE_PICKS = [5, 24, 33, 52, 61, 80, 89]  # 14-team league picks
-MC_SIMS = 10  # Monte Carlo simulations (increase for production)
 POSITION_LIMITS = {'RB': 3, 'WR': 2, 'QB': 1, 'TE': 1}
-DEBUG = True  # Toggle detailed output
 
 # Global data for DP optimization
 PLAYERS = []
@@ -57,39 +61,131 @@ def load_and_merge_data() -> List[Player]:
     
     return sorted(players, key=lambda p: p.overall_rank)
 
-def monte_carlo_survival_realistic(players: List[Player], num_sims: int = MC_SIMS) -> Dict[Tuple[str, int], float]:
+def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims):
+    """Export Monte Carlo results to CSV files for Jupyter analysis."""
+    import pandas as pd
+    from datetime import datetime
+    
+    # 1. Player survival probabilities
+    player_data = []
+    for player in players:
+        row = {
+            'player_name': player.name,
+            'position': player.position,
+            'fantasy_points': player.points,
+            'overall_rank': player.overall_rank
+        }
+        # Add survival probability for each pick
+        for pick in snake_picks:
+            prob = survival_probs.get((player.name, pick), 0.0)
+            row[f'survival_pick_{pick}'] = prob
+        player_data.append(row)
+    
+    df_players = pd.DataFrame(player_data)
+    df_players.to_csv('mc_player_survivals.csv', index=False)
+    
+    # 2. Position summary data
+    position_data = []
+    for pos in ['RB', 'WR', 'QB', 'TE']:
+        pos_players = [p for p in players if p.position == pos]
+        for pick in snake_picks:
+            pick_survivals = []
+            for player in pos_players[:10]:  # Top 10
+                prob = survival_probs.get((player.name, pick), 0.0)
+                pick_survivals.append(prob)
+            
+            position_data.append({
+                'position': pos,
+                'pick': pick,
+                'avg_survival_top10': np.mean(pick_survivals) if pick_survivals else 0,
+                'max_survival_top10': np.max(pick_survivals) if pick_survivals else 0,
+                'min_survival_top10': np.min(pick_survivals) if pick_survivals else 0
+            })
+    
+    df_positions = pd.DataFrame(position_data)
+    df_positions.to_csv('mc_position_summary.csv', index=False)
+    
+    # 3. Configuration metadata
+    config_data = {
+        'num_simulations': [num_sims],
+        'snake_picks': [str(snake_picks)],
+        'position_limits': [str(POSITION_LIMITS)],
+        'export_timestamp': [datetime.now().isoformat()],
+        'total_players': [len(players)]
+    }
+    df_config = pd.DataFrame(config_data)
+    df_config.to_csv('mc_config.csv', index=False)
+    
+    print(f"\nExported Monte Carlo results to CSV files:")
+    print(f"  - mc_player_survivals.csv ({len(player_data)} players)")
+    print(f"  - mc_position_summary.csv ({len(position_data)} position/pick combinations)")
+    print(f"  - mc_config.csv (simulation metadata)")
+    print(f"\nLoad in Jupyter with: pd.read_csv('mc_player_survivals.csv')")
+
+def monte_carlo_survival_realistic(players: List[Player], num_sims: int) -> Dict[Tuple[str, int], float]:
     """
-    More realistic Monte Carlo - respects ESPN rankings with noise.
+    More realistic Monte Carlo with position scarcity modeling.
     Returns survival_probs[(player_name, pick_number)] = probability
     """
     survival_counts = {}
     
+    # Initialize counts for all players at all our picks
+    for player in players:
+        for pick in SNAKE_PICKS:
+            survival_counts[(player.name, pick)] = 0
+    
     for sim in range(num_sims):
         available = players.copy()
+        teams_roster_counts = [{pos: 0 for pos in ['QB', 'RB', 'WR', 'TE']} for _ in range(14)]
         
         for pick_num in range(1, 90):  # First 90 picks
+            if not available:
+                break
+                
             if pick_num in SNAKE_PICKS:
                 # Record who's available at our picks
                 for player in available:
                     key = (player.name, pick_num)
-                    if key not in survival_counts:
-                        survival_counts[key] = 0
                     survival_counts[key] += 1
-            
-            # Simulate other team picking
-            if available and pick_num not in SNAKE_PICKS:
-                # Pick based on ESPN rank with some randomness
-                # Top 3 candidates with weighted probability
-                n_candidates = min(3, len(available))
-                candidates = available[:n_candidates]
+            else:
+                # Simulate other team picking with position scarcity
+                round_num = (pick_num - 1) // 14
+                if round_num % 2 == 0:  # Odd rounds (1, 3, 5...)
+                    team_idx = (pick_num - 1) % 14
+                else:  # Even rounds (2, 4, 6...)
+                    team_idx = 13 - ((pick_num - 1) % 14)
+                team_roster = teams_roster_counts[team_idx]
                 
-                # Weight by rank (1st gets highest weight)
-                weights = [1.0 / (i + 1) for i in range(len(candidates))]
-                weights = np.array(weights) / sum(weights)
+                # Filter candidates by position needs
+                position_weights = {
+                    'QB': 3.0 if team_roster['QB'] == 0 else 0.5,
+                    'RB': 2.0 if team_roster['RB'] < 2 else 1.0,
+                    'WR': 2.0 if team_roster['WR'] < 2 else 1.0,
+                    'TE': 2.5 if team_roster['TE'] == 0 else 0.5
+                }
                 
-                # Pick one
-                choice_idx = np.random.choice(len(candidates), p=weights)
-                available.pop(choice_idx)
+                # Weight candidates by both rank and position need
+                candidate_scores = []
+                for i, player in enumerate(available[:15]):  # Consider top 15
+                    rank_weight = 1.0 / (i + 1)
+                    pos_weight = position_weights.get(player.position, 1.0)
+                    # Add some randomness
+                    noise = np.random.normal(1.0, 0.3)
+                    total_score = rank_weight * pos_weight * max(0.1, noise)
+                    candidate_scores.append((player, total_score))
+                
+                if candidate_scores:
+                    # Pick based on weighted scores
+                    candidates, scores = zip(*candidate_scores)
+                    scores = np.array(scores)
+                    weights = scores / scores.sum()
+                    
+                    choice_idx = np.random.choice(len(candidates), p=weights)
+                    picked_player = candidates[choice_idx]
+                    available.remove(picked_player)
+                    
+                    # Update team roster
+                    team_roster[picked_player.position] += 1
     
     # Convert to probabilities
     survival_probs = {}
@@ -98,14 +194,12 @@ def monte_carlo_survival_realistic(players: List[Player], num_sims: int = MC_SIM
     
     return survival_probs
 
-def get_position_survival_matrix(players: List[Player], survival_probs: Dict) -> Dict[str, np.ndarray]:
+def get_position_survival_matrix(players: List[Player], survival_probs: Dict[Tuple[str, int], float]) -> Dict[str, np.ndarray]:
     """Convert player-level survival to position matrices for ladder EV."""
-    position_players = {}
     position_matrices = {}
     
     for pos in ['RB', 'WR', 'QB', 'TE']:
         pos_players = [p for p in players if p.position == pos]
-        position_players[pos] = pos_players
         
         # Build survival matrix for this position
         max_pick = max(SNAKE_PICKS) + 10
@@ -116,6 +210,13 @@ def get_position_survival_matrix(players: List[Player], survival_probs: Dict) ->
                 matrix[i, pick] = survival_probs.get((player.name, pick), 0.0)
         
         position_matrices[pos] = matrix
+        
+        # Data validation - warn if all survival probabilities are 0
+        if matrix.sum() == 0:
+            print(f"WARNING: No survival probabilities found for position {pos}")
+        else:
+            avg_survival = matrix[matrix > 0].mean() if matrix.sum() > 0 else 0
+            print(f"Position {pos}: {len(pos_players)} players, avg survival: {avg_survival:.3f}")
     
     return position_matrices
 
@@ -152,7 +253,7 @@ def ladder_ev_debug(position: str, pick_number: int, slot: int, players: List[Pl
         contribution = player_value * surv_prob * taken_prob
         expected_value += contribution
         
-        if contribution > 0.1 and j < slot + 4:  # Show meaningful contributions
+        if contribution > 0.01 or j < slot + 2:  # Show top players + meaningful contributions
             debug_info.append(f"    {player.name}: {player_value:.1f}pts × {surv_prob:.2f}surv × {taken_prob:.2f}gone = {contribution:.1f}")
     
     debug_info.append(f"    Total EV: {expected_value:.1f}")
@@ -176,7 +277,7 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
             position_evs[pos] = ev
             
             print(f"\n{pos} Analysis:")
-            for line in debug_info[:5]:  # Show top 5 lines
+            for line in debug_info:  # Show all debug lines
                 print(line)
             
             # Calculate delta to next pick
@@ -185,11 +286,6 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
                 next_ev, _ = ladder_ev_debug(pos, next_pick, slot, PLAYERS, SURVIVAL_PROBS)
                 delta = ev - next_ev
                 print(f"  Delta (now vs pick {next_pick}): {delta:.1f}")
-    
-    # Show decision
-    if position_evs:
-        best_pos = max(position_evs, key=position_evs.get)
-        print(f"\n>>> DECISION: Draft {best_pos} (EV={position_evs[best_pos]:.1f})")
     
     return position_evs
 
@@ -205,7 +301,7 @@ def dp_optimize(pick_idx: int, rb_count: int, wr_count: int, qb_count: int, te_c
     current_pick = SNAKE_PICKS[pick_idx]
     counts = {'RB': rb_count, 'WR': wr_count, 'QB': qb_count, 'TE': te_count}
     
-    best_value = 0.0
+    best_value = -float('inf')  # Start with negative infinity
     best_position = ""
     
     for pos in ['RB', 'WR', 'QB', 'TE']:
@@ -230,6 +326,10 @@ def dp_optimize(pick_idx: int, rb_count: int, wr_count: int, qb_count: int, te_c
                 best_value = total_value
                 best_position = pos
     
+    # If no valid position found, return 0
+    if best_value == -float('inf'):
+        return 0.0, ""
+    
     return best_value, best_position
 
 def show_top_players_survival():
@@ -246,6 +346,8 @@ def show_top_players_survival():
         survival_matrix = SURVIVAL_PROBS[pos]
         
         for i, player in enumerate(pos_players):
+            if i >= survival_matrix.shape[0]:
+                break
             surv_str = ""
             for pick in SNAKE_PICKS:
                 prob = survival_matrix[i, pick] if pick < survival_matrix.shape[1] else 0
@@ -254,26 +356,53 @@ def show_top_players_survival():
 
 def main():
     """Main execution function."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='DP Draft Optimizer')
+    parser.add_argument('--sims', type=int, default=1000, 
+                       help='Number of Monte Carlo simulations (default: 1000)')
+    parser.add_argument('--debug', action='store_true', default=True,
+                       help='Enable debug mode (default: True)')
+    parser.add_argument('--visualize', action='store_true', 
+                       help='Generate Monte Carlo visualization dashboard')
+    parser.add_argument('--save-plots', action='store_true',
+                       help='Save visualization plots as PNG files')
+    parser.add_argument('--export-csv', action='store_true',
+                       help='Export Monte Carlo results to CSV files')
+    args = parser.parse_args()
+    
+    num_sims = args.sims
+    debug_mode = args.debug
+    
     print("Loading player data...")
     players = load_and_merge_data()
     print(f"Loaded {len(players)} players")
     
     # Show top players by position
-    if DEBUG:
+    if debug_mode:
         print("\nTop 3 players by position (with fantasy points):")
         for pos in ['RB', 'WR', 'QB', 'TE']:
             top = [p for p in players if p.position == pos][:3]
             names = ", ".join([f"{p.name}({p.points:.0f})" for p in top])
             print(f"  {pos}: {names}")
     
-    print(f"\nRunning {MC_SIMS} Monte Carlo simulations...")
-    player_survival = monte_carlo_survival_realistic(players, MC_SIMS)
+    print(f"\nRunning {num_sims} Monte Carlo simulations...")
+    player_survival = monte_carlo_survival_realistic(players, num_sims)
     
     # Convert to position matrices
     global SURVIVAL_PROBS
     SURVIVAL_PROBS = get_position_survival_matrix(players, player_survival)
     
-    if DEBUG:
+    # Export to CSV if requested
+    if args.export_csv:
+        export_mc_results_to_csv(players, player_survival, SNAKE_PICKS, num_sims)
+    
+    # Generate visualizations if requested
+    if args.visualize and VISUALIZATION_AVAILABLE:
+        create_simple_dashboard(players, player_survival, SNAKE_PICKS, num_sims)
+    elif args.visualize and not VISUALIZATION_AVAILABLE:
+        print("Visualization not available. Install matplotlib: pip install matplotlib")
+    
+    if debug_mode:
         show_top_players_survival()
     
     print("\nOptimizing draft strategy...")
@@ -287,8 +416,8 @@ def main():
     counts = {'RB': 0, 'WR': 0, 'QB': 0, 'TE': 0}
     
     for pick_idx in range(len(SNAKE_PICKS)):
-        if DEBUG:
-            position_evs = show_pick_analysis(pick_idx, SNAKE_PICKS[pick_idx], counts)
+        if debug_mode:
+            show_pick_analysis(pick_idx, SNAKE_PICKS[pick_idx], counts)
         
         # Get optimal position from DP
         value, position = dp_optimize(
@@ -298,6 +427,10 @@ def main():
         sequence.append(position)
         if position:
             counts[position] += 1
+            
+        # Show the actual decision from DP
+        if debug_mode and position:
+            print(f"\n>>> DP DECISION: Draft {position} (Total EV={value:.1f})")
     
     # Clear cache and solve for final value
     dp_optimize.cache_clear()
@@ -307,16 +440,42 @@ def main():
     print("OPTIMAL DRAFT STRATEGY SUMMARY")
     print("="*50)
     print(f"Expected Total Points: {total_value:.2f}")
+    print(f"Monte Carlo Simulations: {num_sims}")
     print(f"Snake Draft Picks: {SNAKE_PICKS}")
     print()
     
     for i, (pick, position) in enumerate(zip(SNAKE_PICKS, sequence)):
-        pos_count = sequence[:i+1].count(position)
-        # Show what player we'd likely get
-        pos_players = [p for p in players if p.position == position]
-        likely_player = pos_players[pos_count - 1] if pos_count <= len(pos_players) else None
-        player_name = f" (likely: {likely_player.name})" if likely_player else ""
-        print(f"Pick {pick:2d}: {position}{player_name}")
+        if position:  # Only show valid positions
+            pos_count = sequence[:i+1].count(position)
+            # Show what player we'd likely get based on survival probabilities
+            pos_players = [p for p in players if p.position == position]
+            
+            # Find most likely available player based on survival probabilities
+            likely_player = None
+            best_expected_availability = 0
+            
+            for player in pos_players:
+                survival_prob = player_survival.get((player.name, pick), 0.0)
+                # Calculate "taken probability" for higher-ranked players
+                taken_prob = 1.0
+                for better_player in pos_players:
+                    if better_player.overall_rank < player.overall_rank:
+                        better_survival = player_survival.get((better_player.name, pick), 0.0)
+                        taken_prob *= (1 - better_survival)
+                
+                expected_availability = survival_prob * taken_prob
+                if expected_availability > best_expected_availability:
+                    best_expected_availability = expected_availability
+                    likely_player = player
+            
+            if likely_player and best_expected_availability > 0.01:  # Only show if >1% chance
+                player_name = f" (likely: {likely_player.name})"
+            else:
+                player_name = " (no clear favorite)"
+            
+            print(f"Pick {pick:2d}: {position}{player_name}")
+        else:
+            print(f"Pick {pick:2d}: ")
     
     print("\nPosition Summary:")
     for pos in ['RB', 'WR', 'QB', 'TE']:
