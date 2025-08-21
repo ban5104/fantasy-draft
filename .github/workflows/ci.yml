@@ -1,0 +1,59 @@
+name: Fantasy Draft Optimizer CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.11, 3.12, 3.13]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install black flake8 pylint mypy
+    
+    - name: Code formatting check (Black)
+      run: |
+        black --check --diff scripts/
+    
+    - name: Lint check (Flake8)
+      run: |
+        flake8 scripts/ --max-line-length=88 --extend-ignore=E203
+    
+    - name: Type check (MyPy)
+      run: |
+        mypy scripts/ --ignore-missing-imports
+      continue-on-error: true  # Don't fail on type errors for now
+    
+    - name: Verify data files exist
+      run: |
+        test -f data/espn_projections_20250814.csv
+        test -f data/rankings_top300_20250814.csv
+    
+    - name: Run optimizer smoke test
+      run: |
+        python3 scripts/dp_draft_optimizer_debug.py --sims 100
+    
+    - name: Run validation script
+      run: |
+        python3 scripts/calculate_actual_points.py
+    
+    - name: Test CSV export functionality
+      run: |
+        python3 scripts/dp_draft_optimizer_debug.py --sims 200 --export-csv
+        ls data/output-simulations/
