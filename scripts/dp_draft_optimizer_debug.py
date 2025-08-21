@@ -69,28 +69,36 @@ class Player(NamedTuple):
 
 def pos_sorted(players: List[Player], position: str) -> List[Player]:
     """Return players of given position sorted by fantasy points (descending)."""
-    return sorted((p for p in players if p.position == position),
-                  key=lambda p: p.points, reverse=True)
+    return sorted(
+        (p for p in players if p.position == position),
+        key=lambda p: p.points,
+        reverse=True,
+    )
 
 
-def accept_fuzzy_match(espn_name: str, points_name: str, espn_pos: str, score: float, 
-                      min_accept: float = 88, min_warn: float = 70) -> bool:
+def accept_fuzzy_match(
+    espn_name: str,
+    points_name: str,
+    espn_pos: str,
+    score: float,
+    min_accept: float = 88,
+    min_warn: float = 70,
+) -> bool:
     """Guard function for fuzzy matching with position constraint."""
     if score >= min_accept:
         return True
     if score < min_warn:
         return False
-    
     # For scores in warning band (70-88), apply stricter constraints
     # Check for position token overlap or team name overlap
     espn_tokens = set(espn_name.lower().split())
     points_tokens = set(points_name.lower().split())
-    
     # Accept if there's significant token overlap (helps with team abbreviations)
     common_tokens = espn_tokens & points_tokens
-    if len(common_tokens) >= 2:  # At least 2 tokens match (e.g., first name + last name)
+    if (
+        len(common_tokens) >= 2
+    ):  # At least 2 tokens match (e.g., first name + last name)
         return True
-    
     return False
 
 
@@ -120,9 +128,9 @@ def load_and_merge_data() -> List[Player]:
         sys.exit(1)
 
     # Filter out D/ST and K positions before matching to reduce noise
-    espn = espn[~espn['position'].isin(['K', 'DST', 'D/ST', 'DEF'])]
-    if 'position' in points.columns:
-        points = points[~points['position'].isin(['K', 'DST', 'D/ST', 'DEF'])]
+    espn = espn[~espn["position"].isin(["K", "DST", "D/ST", "DEF"])]
+    if "position" in points.columns:
+        points = points[~points["position"].isin(["K", "DST", "D/ST", "DEF"])]
 
     # Create lookup for fantasy points
     points_lookup = {row["PLAYER"]: row["FANTASY_PTS"] for _, row in points.iterrows()}
@@ -188,7 +196,6 @@ def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims, see
     # Get absolute path to output directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(script_dir, "..", "data", "output-simulations")
-    
     # Helper function to create player data
     def create_player_row(player):
         row = {
@@ -288,12 +295,15 @@ def monte_carlo_survival_realistic(
                 if pick_num <= 30:
                     pool_size = CANDIDATE_POOL_SIZE
                 elif pick_num <= 60:
-                    pool_size = min(np.sum(available_mask), int(CANDIDATE_POOL_SIZE * 1.5))
+                    pool_size = min(
+                        np.sum(available_mask), int(CANDIDATE_POOL_SIZE * 1.5)
+                    )
                 else:
-                    pool_size = min(np.sum(available_mask), int(CANDIDATE_POOL_SIZE * 2))
+                    pool_size = min(
+                        np.sum(available_mask), int(CANDIDATE_POOL_SIZE * 2)
+                    )
                 valid_indices = available_indices[available_mask][:pool_size]
                 candidates = [players[i] for i in valid_indices]
-                
                 # Original Gaussian noise approach
                 scores = [
                     (1.0 / (i + 1)) * max(0.1, np.random.normal(1.0, RANDOMNESS_LEVEL))
@@ -306,7 +316,9 @@ def monte_carlo_survival_realistic(
                     weights = weights / (weights.sum() + 1e-12)
                     choice_idx = np.random.choice(len(candidates), p=weights)
                     picked_player = candidates[choice_idx]
-                    player_idx = players.index(picked_player)  # Calculate once per picked player
+                    player_idx = players.index(
+                        picked_player
+                    )  # Calculate once per picked player
                     available_mask[player_idx] = False
 
                     if export_simulation_data:
@@ -327,7 +339,6 @@ def monte_carlo_survival_realistic(
         # Get absolute path to output directory
         script_dir = os.path.dirname(os.path.abspath(__file__))
         output_dir = os.path.join(script_dir, "..", "data", "output-simulations")
-        
         pd.DataFrame(simulation_picks).to_csv(
             os.path.join(output_dir, "mc_simulation_picks.csv"), index=False
         )
@@ -371,15 +382,17 @@ def get_position_survival_matrix(
     for pos in ["RB", "WR", "QB", "TE"]:
         pos_players_sorted = pos_sorted(players, pos)
         if pos in position_matrices:
-            assert position_matrices[pos].shape[0] == len(pos_players_sorted), \
-                f"Matrix rows ({position_matrices[pos].shape[0]}) != players ({len(pos_players_sorted)}) for {pos}"
-            
+            assert position_matrices[pos].shape[0] == len(
+                pos_players_sorted
+            ), f"Matrix rows ({position_matrices[pos].shape[0]}) != players ({len(pos_players_sorted)}) for {pos}"
             # MONOTONIC SURVIVAL CHECK: survival should never increase for later picks
             M = position_matrices[pos]
-            snake_pick_indices = [i for i, pick in enumerate(range(M.shape[1])) if pick in SNAKE_PICKS]
+            snake_pick_indices = [
+                i for i, pick in enumerate(range(M.shape[1])) if pick in SNAKE_PICKS
+            ]
             if len(snake_pick_indices) > 1:
                 # Extract just the snake pick columns and apply cumulative minimum
-                snake_cols = M[:, snake_pick_indices] 
+                snake_cols = M[:, snake_pick_indices]
                 monotonic_cols = np.minimum.accumulate(snake_cols, axis=1)
                 # Put the smoothed values back
                 M[:, snake_pick_indices] = monotonic_cols
@@ -411,9 +424,10 @@ def ladder_ev_debug(
             f"  WARNING: Invalid matrix dimensions or pick number for {position}"
         )
         return 0.0, debug_info
-    
     # Sanity check - ensure pick_number is valid
-    assert 0 <= pick_number < survival.shape[1], f"Invalid pick_number {pick_number} for matrix shape {survival.shape}"
+    assert (
+        0 <= pick_number < survival.shape[1]
+    ), f"Invalid pick_number {pick_number} for matrix shape {survival.shape}"
 
     # Dynamic debug limit based on pick timing to show relevant players
     debug_limit = 25 if pick_number >= 60 else 15 if pick_number >= 30 else 10
@@ -459,7 +473,6 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
     # Calculate EV and DP values for each position
     position_evs = {}
     position_dp_values = {}
-    
     for pos in ["RB", "WR", "QB", "TE"]:
         if counts[pos] < POSITION_LIMITS[pos]:
             slot = counts[pos] + 1
