@@ -45,7 +45,7 @@ RANDOMNESS_LEVEL = 0.3
 # - 15 = Moderate flexibility (DEFAULT)
 # - 20 = High flexibility, reaches become more common
 # - 25 = Very flexible, significant reaches possible
-CANDIDATE_POOL_SIZE = 15
+CANDIDATE_POOL_SIZE = 25
 
 # Note: This simulation uses pure ESPN rankings with noise
 # Teams pick best available players without position-based adjustments
@@ -193,8 +193,14 @@ def monte_carlo_survival_realistic(players: List[Player], num_sims: int, export_
                 for player in available:
                     survival_counts[(player.name, pick_num)] += 1
             else:
-                # Weight candidates by ESPN rank with noise (pure best available)
-                candidates = available[:CANDIDATE_POOL_SIZE]
+                # Dynamic candidate pool sizing based on pick timing
+                if pick_num <= 30:
+                    pool_size = CANDIDATE_POOL_SIZE
+                elif pick_num <= 60:
+                    pool_size = min(len(available), int(CANDIDATE_POOL_SIZE * 1.5))
+                else:
+                    pool_size = min(len(available), int(CANDIDATE_POOL_SIZE * 2))
+                candidates = available[:pool_size]
                 scores = [(1.0 / (i + 1)) * max(0.1, np.random.normal(1.0, RANDOMNESS_LEVEL))
                          for i, p in enumerate(candidates)]
                 
@@ -261,7 +267,9 @@ def ladder_ev_debug(position: str, pick_number: int, slot: int, players: List[Pl
         debug_info.append(f"  WARNING: Invalid matrix dimensions or pick number for {position}")
         return 0.0, debug_info
     
-    for j in range(slot - 1, min(len(pos_players), survival.shape[0], 10)):
+    # Dynamic debug limit based on pick timing to show relevant players
+    debug_limit = 25 if pick_number >= 60 else 15 if pick_number >= 30 else 10
+    for j in range(slot - 1, min(len(pos_players), survival.shape[0], debug_limit)):
         if j < 0:
             continue
             
@@ -271,7 +279,7 @@ def ladder_ev_debug(position: str, pick_number: int, slot: int, players: List[Pl
         # Calculate probability all better players are taken
         taken_prob = 1.0
         for h in range(slot - 1, j):
-            if h < survival.shape[0]:
+            if h < survival.shape[0] and pick_number < survival.shape[1]:
                 taken_prob *= (1 - survival[h, pick_number])
             else:
                 taken_prob = 0.0
