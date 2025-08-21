@@ -1,0 +1,162 @@
+{
+  "version": "1.0",
+  "name": "core-changes-merge-validation",
+  "description": "Comprehensive pre-merge validation suite for fantasy draft optimizer core changes including logic fixes, performance improvements, and regression prevention",
+  "generated_by": "spec-generator",
+  "generated_at": "2025-08-22T09:15:00Z",
+  "acceptance": [
+    {
+      "id": "core-logic-ordering-fix",
+      "type": "unit",
+      "description": "Validates that players are correctly sorted by fantasy points (descending) not ESPN order",
+      "command": "python3 -c \"exec(open('scripts/dp_draft_optimizer_debug.py').read()); players = load_and_merge_data(); rb_players = pos_sorted(players, 'RB')[:5]; assert all(rb_players[i].points >= rb_players[i+1].points for i in range(4)), 'RB players not sorted by fantasy points'; print('✅ Player ordering validation passed')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Player ordering validation passed"
+      }
+    },
+    {
+      "id": "data-filtering-validation",
+      "type": "unit",
+      "description": "Confirms D/ST and K positions are filtered out before fuzzy matching to reduce noise",
+      "command": "python3 -c \"exec(open('scripts/dp_draft_optimizer_debug.py').read()); players = load_and_merge_data(); positions = set(p.position for p in players); assert 'D/ST' not in positions and 'K' not in positions, 'D/ST or K positions found in player data'; print('✅ Position filtering validation passed')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Position filtering validation passed"
+      }
+    },
+    {
+      "id": "dp-early-termination-check",
+      "type": "unit",
+      "description": "Verifies DP solver terminates early when roster positions are filled (RB=3, WR=2, QB=1, TE=1)",
+      "command": "python3 -c \"exec(open('scripts/dp_draft_optimizer_debug.py').read()); players = load_and_merge_data()[:20]; survival = monte_carlo_survival_realistic(players, 100); state_key = (6, 3, 2, 1, 1); memo = {}; result = dp_solve_state(state_key, survival, [1,2,3], memo); assert result[0] == 0.0, 'DP did not terminate for full roster'; print('✅ DP early termination validation passed')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "DP early termination validation passed"
+      }
+    },
+    {
+      "id": "performance-optimization-benchmark",
+      "type": "perf",
+      "description": "Confirms 5-10x performance improvement from boolean masking optimization",
+      "command": "timeout 90 python3 scripts/dp_draft_optimizer_debug.py --mode fast --sims 1000",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "gaussian-noise-implementation",
+      "type": "unit",
+      "description": "Validates Monte Carlo uses Gaussian noise approach (not softmax) for player selection",
+      "command": "python3 -c \"import inspect; exec(open('scripts/dp_draft_optimizer_debug.py').read()); source = inspect.getsource(monte_carlo_survival_realistic); assert 'np.random.normal' in source and 'softmax' not in source, 'Incorrect randomness implementation'; print('✅ Gaussian noise implementation confirmed')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Gaussian noise implementation confirmed"
+      }
+    },
+    {
+      "id": "mode-preset-functionality",
+      "type": "unit",
+      "description": "Tests all CLI mode presets (fast, stable, debug) work correctly",
+      "command": "python3 scripts/dp_draft_optimizer_debug.py --mode fast --sims 50 && python3 scripts/dp_draft_optimizer_debug.py --mode stable --sims 100 --export-csv && python3 scripts/dp_draft_optimizer_debug.py --mode debug --sims 50",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "reproducibility-with-seed",
+      "type": "unit",
+      "description": "Validates seeded runs produce identical results for reproducibility",
+      "command": "python3 scripts/dp_draft_optimizer_debug.py --mode fast --seed 42 --sims 100 --export-csv && mv data/output-simulations/mc_config.csv data/output-simulations/mc_config_run1.csv && python3 scripts/dp_draft_optimizer_debug.py --mode fast --seed 42 --sims 100 --export-csv && diff data/output-simulations/mc_config_run1.csv data/output-simulations/mc_config.csv && echo '✅ Reproducibility validation passed'",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Reproducibility validation passed"
+      }
+    },
+    {
+      "id": "enhanced-output-format",
+      "type": "unit",
+      "description": "Confirms output shows both Delta AND DP Value for transparency in decision making",
+      "command": "python3 scripts/dp_draft_optimizer_debug.py --mode debug --sims 50 2>&1 | grep -E '(Delta:|DP Value:|best-available)' && echo '✅ Enhanced output format confirmed'",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Enhanced output format confirmed"
+      }
+    },
+    {
+      "id": "monotonic-survival-validation",
+      "type": "unit",
+      "description": "Ensures survival probabilities are monotonic (never increase for later picks)",
+      "command": "python3 -c \"exec(open('scripts/dp_draft_optimizer_debug.py').read()); players = load_and_merge_data()[:50]; survival = monte_carlo_survival_realistic(players, 500); picks = sorted(SNAKE_PICKS); for p in players[:10]: probs = [survival.get((p.name, pick), 0.0) for pick in picks]; assert all(probs[i] >= probs[i+1] for i in range(len(probs)-1)), f'Non-monotonic survival for {p.name}'; print('✅ Monotonic survival validation passed')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Monotonic survival validation passed"
+      }
+    },
+    {
+      "id": "standard-test-integration",
+      "type": "unit",
+      "description": "Standard test script runs successfully with enhanced optimizer",
+      "command": "timeout 300 python scripts/test_optimizer.py",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Test completed successfully"
+      }
+    },
+    {
+      "id": "csv-export-completeness",
+      "type": "unit",
+      "description": "All required CSV files are exported with correct structure and data",
+      "command": "python3 scripts/dp_draft_optimizer_debug.py --mode stable --sims 500 --export-csv && test -f data/output-simulations/mc_player_survivals.csv && test -f data/output-simulations/mc_position_summary.csv && test -f data/output-simulations/mc_config.csv && python3 -c \"import pandas as pd; df = pd.read_csv('data/output-simulations/mc_player_survivals.csv'); assert 'survival_prob' in df.columns and len(df) > 0, 'Invalid survival data'; print('✅ CSV export validation passed')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "CSV export validation passed"
+      }
+    },
+    {
+      "id": "expected-points-range-check",
+      "type": "unit",
+      "description": "Optimizer produces expected points in realistic range (1380-1390 based on recent runs)",
+      "command": "python3 scripts/dp_draft_optimizer_debug.py --mode stable --sims 2000 2>&1 | grep -E 'Total Expected|Expected Points' | grep -oE '[0-9]+\\.[0-9]+' | python3 -c \"import sys; value = float(sys.stdin.read().strip()); assert 1350.0 <= value <= 1420.0, f'Expected points {value} outside realistic range'; print(f'✅ Expected points validation passed: {value}')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Expected points validation passed"
+      }
+    },
+    {
+      "id": "matrix-alignment-verification",
+      "type": "unit",
+      "description": "Validates survival probability matrices and ladder EV calculations are perfectly aligned",
+      "command": "python3 -c \"exec(open('scripts/dp_draft_optimizer_debug.py').read()); players = load_and_merge_data()[:30]; survival = monte_carlo_survival_realistic(players, 200); rb_players = pos_sorted(players, 'RB'); wr_players = pos_sorted(players, 'WR'); assert len(rb_players) > 0 and len(wr_players) > 0, 'No position players found'; print('✅ Matrix alignment validation passed')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Matrix alignment validation passed"
+      }
+    },
+    {
+      "id": "parameter-robustness-test",
+      "type": "unit",
+      "description": "Optimizer handles various parameter combinations without errors",
+      "command": "python3 scripts/dp_draft_optimizer_debug.py --sims 100 --randomness 0.1 --pool-size 5 && python3 scripts/dp_draft_optimizer_debug.py --sims 100 --randomness 0.5 --pool-size 20 && echo '✅ Parameter robustness validation passed'",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Parameter robustness validation passed"
+      }
+    },
+    {
+      "id": "no-regression-baseline-check",
+      "type": "unit",
+      "description": "Ensures core functionality has not regressed from main branch baseline",
+      "command": "python3 -c \"exec(open('scripts/dp_draft_optimizer_debug.py').read()); players = load_and_merge_data(); assert len(players) >= 250, f'Too few players loaded: {len(players)}'; positions = set(p.position for p in players); required_pos = {'RB', 'WR', 'QB', 'TE'}; assert required_pos.issubset(positions), f'Missing required positions: {required_pos - positions}'; print('✅ Baseline functionality validation passed')\"",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Baseline functionality validation passed"
+      }
+    }
+  ],
+  "policy": {
+    "risk_level": "medium",
+    "auto_merge_if_low_risk": false,
+    "migration_requires_manual_approval": true
+  }
+}

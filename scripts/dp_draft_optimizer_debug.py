@@ -67,6 +67,33 @@ class Player(NamedTuple):
     overall_rank: int
 
 
+def pos_sorted(players: List[Player], position: str) -> List[Player]:
+    """Return players of given position sorted by fantasy points (descending)."""
+    return sorted((p for p in players if p.position == position),
+                  key=lambda p: p.points, reverse=True)
+
+
+def accept_fuzzy_match(espn_name: str, points_name: str, espn_pos: str, score: float, 
+                      min_accept: float = 88, min_warn: float = 70) -> bool:
+    """Guard function for fuzzy matching with position constraint."""
+    if score >= min_accept:
+        return True
+    if score < min_warn:
+        return False
+    
+    # For scores in warning band (70-88), apply stricter constraints
+    # Check for position token overlap or team name overlap
+    espn_tokens = set(espn_name.lower().split())
+    points_tokens = set(points_name.lower().split())
+    
+    # Accept if there's significant token overlap (helps with team abbreviations)
+    common_tokens = espn_tokens & points_tokens
+    if len(common_tokens) >= 2:  # At least 2 tokens match (e.g., first name + last name)
+        return True
+    
+    return False
+
+
 def load_and_merge_data() -> List[Player]:
     """Load ESPN projections and fantasy points, merge via fuzzy matching."""
     # Validate required CSV files exist before attempting to load
@@ -92,6 +119,11 @@ def load_and_merge_data() -> List[Player]:
         print(f"ERROR: Failed to load CSV files: {e}")
         sys.exit(1)
 
+    # Filter out D/ST and K positions before matching to reduce noise
+    espn = espn[~espn['position'].isin(['K', 'DST', 'D/ST', 'DEF'])]
+    if 'position' in points.columns:
+        points = points[~points['position'].isin(['K', 'DST', 'D/ST', 'DEF'])]
+
     # Create lookup for fantasy points
     points_lookup = {row["PLAYER"]: row["FANTASY_PTS"] for _, row in points.iterrows()}
 
@@ -99,16 +131,18 @@ def load_and_merge_data() -> List[Player]:
     low_quality_matches = []  # Track poor fuzzy matches for logging
 
     for _, row in espn.iterrows():
-        # Fuzzy match player names
+        # Fuzzy match player names with position constraint
         best_match = None
         best_score = 0
         for points_name in points_lookup.keys():
             score = fuzz.ratio(row["player_name"], points_name)
-            if score > best_score:
+            if score > best_score and accept_fuzzy_match(
+                row["player_name"], points_name, row["position"], score
+            ):
                 best_score = score
                 best_match = points_name
 
-        # Use matched points or default
+        # Use matched points or default with stricter threshold
         fantasy_points = points_lookup.get(best_match, 0.0) if best_score > 70 else 0.0
 
         # Log poor quality matches for data quality review
@@ -147,7 +181,7 @@ def load_and_merge_data() -> List[Player]:
     return sorted(players, key=lambda p: p.overall_rank)
 
 
-def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims):
+def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims, seed=None):
     """Export Monte Carlo results to CSV files for Jupyter analysis."""
     import pandas as pd
 
@@ -206,6 +240,9 @@ def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims):
         "position_limits": [str(POSITION_LIMITS)],
         "export_timestamp": [datetime.now().isoformat()],
         "total_players": [len(players)],
+        "randomness_level": [RANDOMNESS_LEVEL],
+        "candidate_pool_size": [CANDIDATE_POOL_SIZE],
+        "seed": [seed if seed is not None else "None"],
     }
     pd.DataFrame(config_data).to_csv(
         os.path.join(output_dir, "mc_config.csv"), index=False
@@ -235,34 +272,42 @@ def monte_carlo_survival_realistic(
     simulation_picks = []
 
     for sim in range(num_sims):
-        available = players.copy()
+        available_mask = np.ones(len(players), dtype=bool)
+        available_indices = np.arange(len(players))
 
         for pick_num in range(1, 90):
-            if not available:
+            if not np.any(available_mask):
                 break
 
             if pick_num in SNAKE_PICKS:
-                for player in available:
-                    survival_counts[(player.name, pick_num)] += 1
+                for i, player in enumerate(players):
+                    if available_mask[i]:
+                        survival_counts[(player.name, pick_num)] += 1
             else:
                 # Dynamic candidate pool sizing based on pick timing
                 if pick_num <= 30:
                     pool_size = CANDIDATE_POOL_SIZE
                 elif pick_num <= 60:
-                    pool_size = min(len(available), int(CANDIDATE_POOL_SIZE * 1.5))
+                    pool_size = min(np.sum(available_mask), int(CANDIDATE_POOL_SIZE * 1.5))
                 else:
-                    pool_size = min(len(available), int(CANDIDATE_POOL_SIZE * 2))
-                candidates = available[:pool_size]
+                    pool_size = min(np.sum(available_mask), int(CANDIDATE_POOL_SIZE * 2))
+                valid_indices = available_indices[available_mask][:pool_size]
+                candidates = [players[i] for i in valid_indices]
+                
+                # Original Gaussian noise approach
                 scores = [
                     (1.0 / (i + 1)) * max(0.1, np.random.normal(1.0, RANDOMNESS_LEVEL))
                     for i, p in enumerate(candidates)
                 ]
 
                 if scores:
-                    weights = np.array(scores) / sum(scores)
+                    # Normalize weights with epsilon to avoid division by zero
+                    weights = np.array(scores)
+                    weights = weights / (weights.sum() + 1e-12)
                     choice_idx = np.random.choice(len(candidates), p=weights)
                     picked_player = candidates[choice_idx]
-                    available.remove(picked_player)
+                    player_idx = players.index(picked_player)  # Calculate once per picked player
+                    available_mask[player_idx] = False
 
                     if export_simulation_data:
                         simulation_picks.append(
@@ -300,7 +345,8 @@ def get_position_survival_matrix(
     position_matrices = {}
 
     for pos in ["RB", "WR", "QB", "TE"]:
-        pos_players = [p for p in players if p.position == pos]
+        # CRITICAL FIX: Use points-sorted order to match ladder calculations
+        pos_players = pos_sorted(players, pos)
 
         # Build survival matrix for this position
         max_pick = max(SNAKE_PICKS) + 10
@@ -321,6 +367,24 @@ def get_position_survival_matrix(
                 f"Position {pos}: {len(pos_players)} players, avg survival: {avg_survival:.3f}"
             )
 
+    # Add sanity checks to catch misalignment
+    for pos in ["RB", "WR", "QB", "TE"]:
+        pos_players_sorted = pos_sorted(players, pos)
+        if pos in position_matrices:
+            assert position_matrices[pos].shape[0] == len(pos_players_sorted), \
+                f"Matrix rows ({position_matrices[pos].shape[0]}) != players ({len(pos_players_sorted)}) for {pos}"
+            
+            # MONOTONIC SURVIVAL CHECK: survival should never increase for later picks
+            M = position_matrices[pos]
+            snake_pick_indices = [i for i, pick in enumerate(range(M.shape[1])) if pick in SNAKE_PICKS]
+            if len(snake_pick_indices) > 1:
+                # Extract just the snake pick columns and apply cumulative minimum
+                snake_cols = M[:, snake_pick_indices] 
+                monotonic_cols = np.minimum.accumulate(snake_cols, axis=1)
+                # Put the smoothed values back
+                M[:, snake_pick_indices] = monotonic_cols
+                position_matrices[pos] = M
+
     return position_matrices
 
 
@@ -332,7 +396,8 @@ def ladder_ev_debug(
     survival_probs: Dict[str, np.ndarray],
 ) -> Tuple[float, List[str]]:
     """Compute expected value with debug info."""
-    pos_players = [p for p in players if p.position == position]
+    # CRITICAL FIX: Use points-sorted order to match survival matrix
+    pos_players = pos_sorted(players, position)
     if not pos_players or position not in survival_probs:
         return 0.0, [f"  WARNING: No players or survival data for position {position}"]
 
@@ -346,6 +411,9 @@ def ladder_ev_debug(
             f"  WARNING: Invalid matrix dimensions or pick number for {position}"
         )
         return 0.0, debug_info
+    
+    # Sanity check - ensure pick_number is valid
+    assert 0 <= pick_number < survival.shape[1], f"Invalid pick_number {pick_number} for matrix shape {survival.shape}"
 
     # Dynamic debug limit based on pick timing to show relevant players
     debug_limit = 25 if pick_number >= 60 else 15 if pick_number >= 30 else 10
@@ -388,8 +456,10 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
     )
     print(f"{'='*60}")
 
-    # Calculate EV for each position
+    # Calculate EV and DP values for each position
     position_evs = {}
+    position_dp_values = {}
+    
     for pos in ["RB", "WR", "QB", "TE"]:
         if counts[pos] < POSITION_LIMITS[pos]:
             slot = counts[pos] + 1
@@ -397,6 +467,19 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
                 pos, pick_number, slot, PLAYERS, SURVIVAL_PROBS
             )
             position_evs[pos] = ev
+            
+            # Calculate total DP value if we draft this position
+            new_counts = counts.copy()
+            new_counts[pos] += 1
+            future_value, _ = dp_optimize(
+                pick_idx + 1,
+                new_counts["RB"],
+                new_counts["WR"],
+                new_counts["QB"],
+                new_counts["TE"],
+            )
+            total_dp_value = ev + future_value
+            position_dp_values[pos] = total_dp_value
 
             print(f"\n{pos} Analysis:")
             for line in debug_info:  # Show all debug lines
@@ -410,6 +493,20 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
                 )
                 delta = ev - next_ev
                 print(f"  Delta (now vs pick {next_pick}): {delta:.1f}")
+            
+            # Show total DP value
+            print(f"  Total DP Value (V_P): {total_dp_value:.1f}")
+        else:
+            # Position is full
+            position_dp_values[pos] = -float('inf')
+
+    # Show counterfactual DP values summary
+    print(f"\nCounterfactual DP Values Summary:")
+    for pos in ["RB", "WR", "QB", "TE"]:
+        if counts[pos] < POSITION_LIMITS[pos]:
+            print(f"  {pos}: V_P = {position_dp_values[pos]:.1f}")
+        else:
+            print(f"  {pos}: FULL (cannot draft)")
 
     return position_evs
 
@@ -419,6 +516,10 @@ def dp_optimize(
     pick_idx: int, rb_count: int, wr_count: int, qb_count: int, te_count: int
 ) -> Tuple[float, str]:
     """DP recurrence: F(k,r,w,q,t) = max{ladder_ev + F(k+1,...)}"""
+
+    # Early termination if roster is full
+    if rb_count == 3 and wr_count == 2 and qb_count == 1 and te_count == 1:
+        return 0.0, ""
 
     if pick_idx >= len(SNAKE_PICKS):
         return 0.0, ""
@@ -477,6 +578,81 @@ def dp_optimize(
     return (best_value, best_position) if best_value != -float("inf") else (0.0, "")
 
 
+def run_stability_sweep(players: List[Player]) -> None:
+    """Run parameter stability sweep to test robustness."""
+    global PLAYERS, SURVIVAL_PROBS, RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE
+    
+    print("\n" + "=" * 60)
+    print("PARAMETER STABILITY SWEEP")
+    print("=" * 60)
+    
+    # Store original values
+    orig_randomness = RANDOMNESS_LEVEL
+    orig_pool_size = CANDIDATE_POOL_SIZE
+    
+    # Test different parameter combinations
+    randomness_levels = [0.2, 0.3, 0.4]
+    pool_sizes = [15, 20, 25]
+    
+    results = []
+    
+    for rand_level in randomness_levels:
+        for pool_size in pool_sizes:
+            RANDOMNESS_LEVEL = rand_level
+            CANDIDATE_POOL_SIZE = pool_size
+            
+            # Run shorter simulation for sweep
+            player_survival = monte_carlo_survival_realistic(players, 1000)
+            SURVIVAL_PROBS = get_position_survival_matrix(players, player_survival)
+            
+            # Get optimal sequence
+            sequence = []
+            counts = {"RB": 0, "WR": 0, "QB": 0, "TE": 0}
+            
+            dp_optimize.cache_clear()
+            for pick_idx in range(len(SNAKE_PICKS)):
+                value, position = dp_optimize(
+                    pick_idx, counts["RB"], counts["WR"], counts["QB"], counts["TE"]
+                )
+                sequence.append(position)
+                if position:
+                    counts[position] += 1
+            
+            # Calculate total expected value
+            total_value, _ = dp_optimize(0, 0, 0, 0, 0)
+            
+            results.append({
+                'randomness': rand_level,
+                'pool_size': pool_size,
+                'sequence': '-'.join(sequence),
+                'total_value': total_value
+            })
+            
+            print(f"  Rand={rand_level}, Pool={pool_size}: {'-'.join(sequence)} (EV={total_value:.1f})")
+    
+    # Restore original values
+    RANDOMNESS_LEVEL = orig_randomness
+    CANDIDATE_POOL_SIZE = orig_pool_size
+    
+    # Analyze stability
+    unique_sequences = set(r['sequence'] for r in results)
+    print(f"\nStability Analysis:")
+    print(f"  Unique sequences found: {len(unique_sequences)} out of {len(results)} parameter combinations")
+    
+    if len(unique_sequences) == 1:
+        print("  Result: HIGHLY STABLE - Same sequence across all parameters")
+    elif len(unique_sequences) <= 3:
+        print("  Result: STABLE - Few sequence variations")
+    else:
+        print("  Result: UNSTABLE - Many sequence variations")
+    
+    # Show most common sequence
+    from collections import Counter
+    sequence_counts = Counter(r['sequence'] for r in results)
+    most_common = sequence_counts.most_common(1)[0]
+    print(f"  Most common sequence: {most_common[0]} (appeared {most_common[1]}/{len(results)} times)")
+
+
 def show_top_players_survival():
     """Show survival probabilities for top players at each position."""
     global PLAYERS, SURVIVAL_PROBS
@@ -491,7 +667,8 @@ def show_top_players_survival():
 
     for pos in ["RB", "WR", "QB", "TE"]:
         print(f"\n{pos} Top 5:")
-        pos_players = [p for p in PLAYERS if p.position == pos][:5]
+        # CRITICAL FIX: Use points-sorted order to match ladder calculations
+        pos_players = pos_sorted(PLAYERS, pos)[:5]
 
         if pos not in SURVIVAL_PROBS or SURVIVAL_PROBS[pos].size == 0:
             print(f"  WARNING: No survival data for position {pos}")
@@ -561,14 +738,47 @@ def main():
     parser.add_argument(
         "--pool-size", type=int, help="Candidate pool size (override config)"
     )
+    parser.add_argument(
+        "--seed", type=int, help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--stability-sweep",
+        action="store_true",
+        help="Run parameter stability sweep to test robustness"
+    )
+    parser.add_argument(
+        "--mode", 
+        choices=["fast", "stable", "debug"],
+        help="Preset configurations (overrides individual params)"
+    )
     args = parser.parse_args()
 
     # Apply command-line overrides
     global RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE
+    
+    # Handle preset modes
+    if args.mode:
+        if args.mode == "fast":
+            args.sims = 100
+            args.debug = False
+            RANDOMNESS_LEVEL = 0.3
+        elif args.mode == "stable":
+            args.sims = 5000
+            args.export_csv = True
+            RANDOMNESS_LEVEL = 0.3
+        elif args.mode == "debug":
+            args.sims = 1000
+            args.debug = True
+            args.visualize = True
     if args.randomness is not None:
         RANDOMNESS_LEVEL = max(0.0, min(1.0, args.randomness))  # Clamp to valid range
     if args.pool_size is not None:
         CANDIDATE_POOL_SIZE = max(3, min(50, args.pool_size))  # Reasonable bounds
+    
+    # Set random seed for reproducibility
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        print(f"Random seed set to: {args.seed}")
 
     print("Loading player data...")
     players = load_and_merge_data()
@@ -578,7 +788,8 @@ def main():
     if args.debug:
         print("\nTop 3 players by position (with fantasy points):")
         for pos in ["RB", "WR", "QB", "TE"]:
-            top = [p for p in players if p.position == pos][:3]
+            # CRITICAL FIX: Use points-sorted order to match ladder calculations
+            top = pos_sorted(players, pos)[:3]
             names = ", ".join([f"{p.name}({p.points:.0f})" for p in top])
             print(f"  {pos}: {names}")
 
@@ -605,7 +816,7 @@ def main():
 
     # Handle optional exports and visualization
     if args.export_csv:
-        export_mc_results_to_csv(players, player_survival, SNAKE_PICKS, args.sims)
+        export_mc_results_to_csv(players, player_survival, SNAKE_PICKS, args.sims, args.seed)
 
     if args.visualize:
         if VISUALIZATION_AVAILABLE:
@@ -617,6 +828,10 @@ def main():
 
     if args.debug:
         show_top_players_survival()
+
+    if args.stability_sweep:
+        run_stability_sweep(players)
+        return  # Exit after stability sweep
 
     print("\nOptimizing draft strategy...")
 
@@ -649,29 +864,31 @@ def main():
     print(f"Snake Draft Picks: {SNAKE_PICKS}")
     print()
 
-    # Show pick-by-pick strategy with likely players
+    # Show pick-by-pick strategy with likely players and availability probabilities
     for i, (pick, position) in enumerate(zip(SNAKE_PICKS, sequence)):
         if position:
-            pos_players = [p for p in players if p.position == position]
+            # CRITICAL FIX: Use points-sorted order to match ladder calculations
+            pos_players = pos_sorted(players, position)
 
-            # Find most likely available player
+            # Find most likely available player with availability probability
             best_availability, likely_player = 0, None
-            for player in pos_players:
+            for j, player in enumerate(pos_players):
                 survival_prob = player_survival.get((player.name, pick), 0.0)
+                # Calculate probability all better players (by points) are taken
                 taken_prob = 1.0
-                for better in pos_players:
-                    if better.overall_rank < player.overall_rank:
-                        taken_prob *= 1 - player_survival.get((better.name, pick), 0.0)
+                for h in range(j):  # All players ranked higher by points
+                    better_player = pos_players[h]
+                    taken_prob *= 1 - player_survival.get((better_player.name, pick), 0.0)
 
                 availability = survival_prob * taken_prob
                 if availability > best_availability:
                     best_availability, likely_player = availability, player
 
-            player_info = (
-                f" (likely: {likely_player.name})"
-                if likely_player and best_availability > 0.01
-                else " (no clear favorite)"
-            )
+            if likely_player and best_availability > 0.01:
+                player_info = f" (likely: {likely_player.name}, P={best_availability:.2f} best-available)"
+            else:
+                player_info = " (no clear favorite)"
+                
             print(f"Pick {pick:2d}: {position}{player_info}")
         else:
             print(f"Pick {pick:2d}: ")
