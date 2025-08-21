@@ -1,2 +1,2 @@
 num_simulations,snake_picks,position_limits,export_timestamp,total_players
-1500,"[5, 24, 33, 52, 61, 80, 89]","{'RB': 3, 'WR': 2, 'QB': 1, 'TE': 1}",2025-08-21T12:09:00.833509,300
+10000,"[5, 24, 33, 52, 61, 80, 89]","{'RB': 3, 'WR': 2, 'QB': 1, 'TE': 1}",2025-08-21T17:56:26.344484,300

@@ -1,0 +1,61 @@
+{
+  "version": "1.0",
+  "name": "fix-simulation-parameters",
+  "description": "Validates Monte Carlo simulation parameter fixes for realistic draft survival probabilities",
+  "generated_by": "spec-generator",
+  "generated_at": "2025-01-21T20:30:00Z",
+  "acceptance": [
+    {
+      "id": "optimizer-runs-without-error",
+      "type": "custom",
+      "description": "Core optimizer executes successfully with new simulation parameters",
+      "command": "cd /Users/ben/projects/fantasy-draft && python3 scripts/dp_draft_optimizer_debug.py --sims 100",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "validation-script-confirms-improvement",
+      "type": "custom", 
+      "description": "Validation script shows strategy improvement with actual projected points",
+      "command": "cd /Users/ben/projects/fantasy-draft && python3 scripts/calculate_actual_points.py",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "Later strategy is better"
+      }
+    },
+    {
+      "id": "simulation-exports-complete-data",
+      "type": "custom",
+      "description": "Monte Carlo simulation exports all required CSV files for analysis",
+      "command": "cd /Users/ben/projects/fantasy-draft && python3 scripts/dp_draft_optimizer_debug.py --sims 500 --export-csv && ls data/output-simulations/",
+      "expect": {
+        "exitCode": 0,
+        "outputContains": "mc_player_survivals.csv"
+      }
+    },
+    {
+      "id": "dependencies-install-cleanly",
+      "type": "custom",
+      "description": "All required Python dependencies install without conflicts",
+      "command": "cd /Users/ben/projects/fantasy-draft && pip install -r requirements.txt --dry-run",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "data-files-exist",
+      "type": "static",
+      "description": "Required CSV data files are present for optimizer execution",
+      "command": "cd /Users/ben/projects/fantasy-draft && test -f data/espn_projections_20250814.csv && test -f data/rankings_top300_20250814.csv",
+      "expect": {
+        "exitCode": 0
+      }
+    }
+  ],
+  "policy": {
+    "risk_level": "low",
+    "auto_merge_if_low_risk": true,
+    "migration_requires_manual_approval": false
+  }
+}
