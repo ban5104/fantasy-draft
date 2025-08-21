@@ -56,6 +56,15 @@ These documents explain the theoretical underpinnings that drive the code archit
 
 ## Development Commands
 
+### Standard Test
+
+```bash
+# Recommended standard test - comprehensive optimization with quality checks
+python scripts/test_optimizer.py
+```
+
+This runs: `python3 scripts/dp_draft_optimizer_debug.py --sims 10000 --export-csv`
+
 ### Running the Optimizer
 
 ```bash
