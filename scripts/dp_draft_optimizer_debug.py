@@ -196,6 +196,7 @@ def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims, see
     # Get absolute path to output directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(script_dir, "..", "data", "output-simulations")
+
     # Helper function to create player data
     def create_player_row(player):
         row = {
@@ -480,7 +481,6 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
                 pos, pick_number, slot, PLAYERS, SURVIVAL_PROBS
             )
             position_evs[pos] = ev
-            
             # Calculate total DP value if we draft this position
             new_counts = counts.copy()
             new_counts[pos] += 1
@@ -506,12 +506,11 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
                 )
                 delta = ev - next_ev
                 print(f"  Delta (now vs pick {next_pick}): {delta:.1f}")
-            
             # Show total DP value
             print(f"  Total DP Value (V_P): {total_dp_value:.1f}")
         else:
             # Position is full
-            position_dp_values[pos] = -float('inf')
+            position_dp_values[pos] = -float("inf")
 
     # Show counterfactual DP values summary
     print(f"\nCounterfactual DP Values Summary:")
@@ -594,34 +593,34 @@ def dp_optimize(
 def run_stability_sweep(players: List[Player]) -> None:
     """Run parameter stability sweep to test robustness."""
     global PLAYERS, SURVIVAL_PROBS, RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE
-    
+
     print("\n" + "=" * 60)
     print("PARAMETER STABILITY SWEEP")
     print("=" * 60)
-    
+
     # Store original values
     orig_randomness = RANDOMNESS_LEVEL
     orig_pool_size = CANDIDATE_POOL_SIZE
-    
+
     # Test different parameter combinations
     randomness_levels = [0.2, 0.3, 0.4]
     pool_sizes = [15, 20, 25]
-    
+
     results = []
-    
+
     for rand_level in randomness_levels:
         for pool_size in pool_sizes:
             RANDOMNESS_LEVEL = rand_level
             CANDIDATE_POOL_SIZE = pool_size
-            
+
             # Run shorter simulation for sweep
             player_survival = monte_carlo_survival_realistic(players, 1000)
             SURVIVAL_PROBS = get_position_survival_matrix(players, player_survival)
-            
+
             # Get optimal sequence
             sequence = []
             counts = {"RB": 0, "WR": 0, "QB": 0, "TE": 0}
-            
+
             dp_optimize.cache_clear()
             for pick_idx in range(len(SNAKE_PICKS)):
                 value, position = dp_optimize(
@@ -630,28 +629,34 @@ def run_stability_sweep(players: List[Player]) -> None:
                 sequence.append(position)
                 if position:
                     counts[position] += 1
-            
+
             # Calculate total expected value
             total_value, _ = dp_optimize(0, 0, 0, 0, 0)
-            
-            results.append({
-                'randomness': rand_level,
-                'pool_size': pool_size,
-                'sequence': '-'.join(sequence),
-                'total_value': total_value
-            })
-            
-            print(f"  Rand={rand_level}, Pool={pool_size}: {'-'.join(sequence)} (EV={total_value:.1f})")
+
+            results.append(
+                {
+                    "randomness": rand_level,
+                    "pool_size": pool_size,
+                    "sequence": "-".join(sequence),
+                    "total_value": total_value,
+                }
+            )
+
+            print(
+                f"  Rand={rand_level}, Pool={pool_size}: {'-'.join(sequence)} (EV={total_value:.1f})"
+            )
     
     # Restore original values
     RANDOMNESS_LEVEL = orig_randomness
     CANDIDATE_POOL_SIZE = orig_pool_size
-    
+
     # Analyze stability
-    unique_sequences = set(r['sequence'] for r in results)
+    unique_sequences = set(r["sequence"] for r in results)
     print(f"\nStability Analysis:")
-    print(f"  Unique sequences found: {len(unique_sequences)} out of {len(results)} parameter combinations")
-    
+    print(
+        f"  Unique sequences found: {len(unique_sequences)} out of {len(results)} parameter combinations"
+    )
+
     if len(unique_sequences) == 1:
         print("  Result: HIGHLY STABLE - Same sequence across all parameters")
     elif len(unique_sequences) <= 3:
@@ -661,9 +666,12 @@ def run_stability_sweep(players: List[Player]) -> None:
     
     # Show most common sequence
     from collections import Counter
-    sequence_counts = Counter(r['sequence'] for r in results)
+
+    sequence_counts = Counter(r["sequence"] for r in results)
     most_common = sequence_counts.most_common(1)[0]
-    print(f"  Most common sequence: {most_common[0]} (appeared {most_common[1]}/{len(results)} times)")
+    print(
+        f"  Most common sequence: {most_common[0]} (appeared {most_common[1]}/{len(results)} times)"
+    )
 
 
 def show_top_players_survival():
@@ -751,24 +759,22 @@ def main():
     parser.add_argument(
         "--pool-size", type=int, help="Candidate pool size (override config)"
     )
-    parser.add_argument(
-        "--seed", type=int, help="Random seed for reproducibility"
-    )
+    parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
     parser.add_argument(
         "--stability-sweep",
         action="store_true",
-        help="Run parameter stability sweep to test robustness"
+        help="Run parameter stability sweep to test robustness",
     )
     parser.add_argument(
-        "--mode", 
+        "--mode",
         choices=["fast", "stable", "debug"],
-        help="Preset configurations (overrides individual params)"
+        help="Preset configurations (overrides individual params)",
     )
     args = parser.parse_args()
 
     # Apply command-line overrides
     global RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE
-    
+
     # Handle preset modes
     if args.mode:
         if args.mode == "fast":
@@ -787,7 +793,7 @@ def main():
         RANDOMNESS_LEVEL = max(0.0, min(1.0, args.randomness))  # Clamp to valid range
     if args.pool_size is not None:
         CANDIDATE_POOL_SIZE = max(3, min(50, args.pool_size))  # Reasonable bounds
-    
+
     # Set random seed for reproducibility
     if args.seed is not None:
         np.random.seed(args.seed)
@@ -829,7 +835,9 @@ def main():
 
     # Handle optional exports and visualization
     if args.export_csv:
-        export_mc_results_to_csv(players, player_survival, SNAKE_PICKS, args.sims, args.seed)
+        export_mc_results_to_csv(
+            players, player_survival, SNAKE_PICKS, args.sims, args.seed
+        )
 
     if args.visualize:
         if VISUALIZATION_AVAILABLE:
@@ -891,7 +899,9 @@ def main():
                 taken_prob = 1.0
                 for h in range(j):  # All players ranked higher by points
                     better_player = pos_players[h]
-                    taken_prob *= 1 - player_survival.get((better_player.name, pick), 0.0)
+                    taken_prob *= 1 - player_survival.get(
+                        (better_player.name, pick), 0.0
+                    )
 
                 availability = survival_prob * taken_prob
                 if availability > best_availability:
@@ -901,7 +911,7 @@ def main():
                 player_info = f" (likely: {likely_player.name}, P={best_availability:.2f} best-available)"
             else:
                 player_info = " (no clear favorite)"
-                
+
             print(f"Pick {pick:2d}: {position}{player_info}")
         else:
             print(f"Pick {pick:2d}: ")
