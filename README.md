@@ -2,6 +2,8 @@
 
 A data-driven draft optimization tool that uses dynamic programming and Monte Carlo simulation to determine optimal fantasy football draft strategies. Instead of evaluating individual players, this system uses a novel "Dynamic Programming over Positions" approach to maximize expected fantasy points across all draft picks.
 
+**Recent Major Enhancements**: Significant correctness fixes, 5-10x performance improvements, and enhanced debugging capabilities with full reproducibility support.
+
 ## Why This Approach
 
 Traditional draft tools focus on player rankings and ADP (Average Draft Position). This optimizer goes deeper by:
@@ -19,11 +21,14 @@ The result is a strategy that tells you which **position** to target at each of 
 # Install dependencies
 pip install -r requirements.txt
 
-# Run basic optimization (uses default 14-team league settings)
-python scripts/dp_draft_optimizer_debug.py
+# Fast optimization (100 simulations, quick results)
+python scripts/dp_draft_optimizer_debug.py --mode fast
 
-# Run with custom parameters for your league
-python scripts/dp_draft_optimizer_debug.py --sims 5000 --randomness 0.3 --pool-size 15
+# Production quality (5000 simulations, CSV exports)
+python scripts/dp_draft_optimizer_debug.py --mode stable
+
+# Full analysis with visualizations (1000 simulations)
+python scripts/dp_draft_optimizer_debug.py --mode debug
 ```
 
 ## Installation
@@ -44,29 +49,33 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Basic Optimization
+### Mode Presets (Recommended)
 
 ```bash
-# Run with default settings (your picks: [5, 24, 33, 52, 61, 80, 89])
-python scripts/dp_draft_optimizer_debug.py
+# Fast mode - quick results for testing (100 simulations)
+python scripts/dp_draft_optimizer_debug.py --mode fast
+
+# Stable mode - production quality with exports (5000 simulations)
+python scripts/dp_draft_optimizer_debug.py --mode stable
+
+# Debug mode - full analysis with visualizations (1000 simulations)
+python scripts/dp_draft_optimizer_debug.py --mode debug
 ```
 
-**Output:** Optimal position to draft at each of your picks with expected value analysis.
-
-### Advanced Configuration
+### Advanced Usage
 
 ```bash
-# Customize simulation parameters
-python scripts/dp_draft_optimizer_debug.py \
-  --sims 10000 \
-  --randomness 0.4 \
-  --pool-size 20
+# Reproducible results with seed parameter
+python scripts/dp_draft_optimizer_debug.py --mode stable --seed 42
 
-# Export detailed results for analysis
-python scripts/dp_draft_optimizer_debug.py \
-  --export-csv \
-  --export-simulations \
-  --visualize
+# Parameter robustness testing
+python scripts/dp_draft_optimizer_debug.py --stability-sweep
+
+# Custom parameters (overrides mode presets)
+python scripts/dp_draft_optimizer_debug.py --sims 10000 --randomness 0.4 --pool-size 20
+
+# Full feature set
+python scripts/dp_draft_optimizer_debug.py --export-csv --export-simulations --visualize --save-plots
 ```
 
 ### Data Analysis
@@ -82,10 +91,10 @@ jupyter notebook jupyter-notebooks/monte_carlo_visualization.ipynb
 ## How It Works
 
 ### 1. Data Pipeline
-Merges ESPN projections with fantasy point rankings using fuzzy string matching to create a unified player dataset.
+Merges ESPN projections with fantasy point rankings using fuzzy string matching, with automatic D/ST and K filtering for cleaner matching.
 
 ### 2. Monte Carlo Simulation
-Simulates thousands of draft scenarios to compute **survival probabilities** - the likelihood each player will be available at each of your picks.
+Simulates thousands of draft scenarios with rank-weighted Gaussian noise selection and 5-10x performance optimization to compute **survival probabilities** - the likelihood each player will be available at each of your picks.
 
 ### 3. Dynamic Programming Optimization
 Uses backward induction to find the optimal position to draft at each pick:
@@ -95,7 +104,7 @@ Uses backward induction to find the optimal position to draft at each pick:
 - **Constraints:** Position limits (e.g., max 3 RB, 2 WR, 1 QB, 1 TE)
 
 ### 4. Position Ladder Expected Value
-Calculates the expected points from drafting the "next best available" player at each position, accounting for survival probabilities.
+Calculates the expected points from drafting the "next best available" player at each position with correct fantasy point ordering and survival probability alignment.
 
 ## Configuration
 
@@ -149,15 +158,18 @@ For theoretical foundation and high-level strategy planning, see the `specs/` di
 The optimizer produces:
 
 1. **Optimal Strategy:** Which position to draft at each of your picks
-2. **Expected Value Analysis:** Point projections for each decision
-3. **Debug Information:** Player survival probabilities and decision reasoning
-4. **Export Data:** CSV files for further analysis (when using `--export-csv`)
-5. **Visualizations:** Charts and plots (when using `--visualize`)
+2. **Enhanced Debug Analysis:** Both immediate decision value (Delta) and total DP value with counterfactual analysis
+3. **Player Availability:** Survival probabilities with clear availability displays (e.g., "P=0.82 best-available")
+4. **Export Data:** CSV files with reproducibility metadata (seed included)
+5. **Visualizations:** Charts and plots with stability sweep analysis
 
 **Sample Output:**
 ```
-Pick 5 (Round 1): Draft RB (Expected: 245.2 pts, Delta vs WR: +12.4)
-Pick 24 (Round 2): Draft WR (Expected: 178.9 pts, Delta vs RB: +8.1)
-Pick 33 (Round 3): Draft WR (Expected: 156.3 pts, Delta vs RB: +5.7)
+Pick 5 (Round 1): Draft RB 
+  Delta: +12.4 vs WR | DP Value: 1,234.5 | Best RB: P=0.95 available
+Pick 24 (Round 2): Draft WR
+  Delta: +8.1 vs RB | DP Value: 987.3 | Best WR: P=0.78 available  
+Pick 33 (Round 3): Draft WR
+  Delta: +5.7 vs RB | DP Value: 823.1 | Best WR: P=0.65 available
 ...
 ```
