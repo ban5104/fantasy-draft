@@ -645,7 +645,6 @@ def run_stability_sweep(players: List[Player]) -> None:
             print(
                 f"  Rand={rand_level}, Pool={pool_size}: {'-'.join(sequence)} (EV={total_value:.1f})"
             )
-    
     # Restore original values
     RANDOMNESS_LEVEL = orig_randomness
     CANDIDATE_POOL_SIZE = orig_pool_size
@@ -663,7 +662,6 @@ def run_stability_sweep(players: List[Player]) -> None:
         print("  Result: STABLE - Few sequence variations")
     else:
         print("  Result: UNSTABLE - Many sequence variations")
-    
     # Show most common sequence
     from collections import Counter
 
