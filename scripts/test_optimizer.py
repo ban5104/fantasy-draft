@@ -31,7 +31,7 @@ def run_optimizer_test():
     print("=" * 60)
 
     try:
-        result = subprocess.run(cmd, check=True, capture_output=False)
+        subprocess.run(cmd, check=True, capture_output=False)
         print("\n" + "=" * 60)
         print("✅ Test completed successfully!")
         print("\nExported files available in data/output-simulations/:")

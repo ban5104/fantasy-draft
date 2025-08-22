@@ -4,7 +4,6 @@ DP Draft Optimizer with DEBUG MODE - shows detailed calculations.
 """
 
 import argparse
-import itertools
 import os
 import sys
 from functools import lru_cache
@@ -462,7 +461,6 @@ def ladder_ev_debug(
 
 def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
     """Show detailed analysis for a specific pick."""
-    global PLAYERS, SURVIVAL_PROBS
 
     print(f"\n{'='*60}")
     print(f"PICK {pick_number} ANALYSIS (Pick #{pick_idx + 1} of {len(SNAKE_PICKS)})")
@@ -536,8 +534,6 @@ def dp_optimize(
     if pick_idx >= len(SNAKE_PICKS):
         return 0.0, ""
 
-    global PLAYERS, SURVIVAL_PROBS
-
     # Basic validation
     if pick_idx < 0 or not PLAYERS or not SURVIVAL_PROBS:
         return 0.0, ""
@@ -592,7 +588,7 @@ def dp_optimize(
 
 def run_stability_sweep(players: List[Player]) -> None:
     """Run parameter stability sweep to test robustness."""
-    global PLAYERS, SURVIVAL_PROBS, RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE
+    global RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE
 
     print("\n" + "=" * 60)
     print("PARAMETER STABILITY SWEEP")
@@ -674,7 +670,6 @@ def run_stability_sweep(players: List[Player]) -> None:
 
 def show_top_players_survival():
     """Show survival probabilities for top players at each position."""
-    global PLAYERS, SURVIVAL_PROBS
 
     print("\n" + "=" * 60)
     print("TOP PLAYER SURVIVAL PROBABILITIES")
