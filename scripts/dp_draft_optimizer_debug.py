@@ -9,6 +9,7 @@ import os
 import sys
 from functools import lru_cache
 from typing import Dict, List, NamedTuple, Tuple
+import heapq
 
 import numpy as np
 import pandas as pd
@@ -485,7 +486,13 @@ def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims, dat
             for pick in snake_picks:
                 data_key = (player.unique_id, pick)
                 if data_key in survival_probs and survival_probs[data_key]:
-                    survival_array = np.array(survival_probs[data_key])
+                    # Check if we have array data (enhanced) or float data (standard)
+                    survival_data = survival_probs[data_key]
+                    if isinstance(survival_data, (list, np.ndarray)):
+                        survival_array = np.array(survival_data)
+                    else:
+                        # If it's a float, treat it as a single-value array
+                        survival_array = np.array([survival_data])
                     
                     # Basic statistics
                     mean_survival = np.mean(survival_array)
@@ -557,7 +564,12 @@ def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims, dat
                 for p in pos_players:
                     data_key = (p.unique_id, pick)
                     if data_key in survival_probs and survival_probs[data_key]:
-                        survival_arrays.append(np.mean(survival_probs[data_key]))
+                        survival_data = survival_probs[data_key]
+                        # Handle both array and float data
+                        if isinstance(survival_data, (list, np.ndarray)):
+                            survival_arrays.append(np.mean(survival_data))
+                        else:
+                            survival_arrays.append(survival_data)
                 
                 if survival_arrays:
                     position_data.append(
@@ -970,6 +982,23 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
         else:
             print(f"  {pos}: FULL (cannot draft)")
 
+    # Add regret analysis
+    regret_table = compute_pick_regret(pick_idx, counts)
+    show_regret_table(regret_table)
+
+    # Add flexibility index (Phase 2 Feature 4)
+    flexibility = compute_flexibility_index(position_dp_values)
+    flex_desc = (
+        "(many options)" if flexibility > 0.7 
+        else "(limited options)" if flexibility < 0.3 
+        else "(moderate options)"
+    )
+    print(f"\nFlexibility Index: {flexibility:.2f} {flex_desc}")
+
+    # Add contingency tree (Phase 2 Feature 5)
+    contingency_tree = build_contingency_tree(pick_idx, counts)
+    show_contingency_tree(contingency_tree, pick_number)
+
     return position_evs
 
 
@@ -1051,6 +1080,354 @@ def dp_optimize(
         }
 
     return (best_value, best_position) if best_value != -float("inf") else (0.0, "")
+
+
+@lru_cache(maxsize=None)
+def dp_optimize_k_best(
+    pick_idx: int, rb_count: int, wr_count: int, qb_count: int, te_count: int, k: int = 8
+) -> List[Tuple[float, str, Dict]]:
+    """DP recurrence returning K-best options: F(k,r,w,q,t) = K-best{ladder_ev + F(k+1,...)}"""
+
+    # Early termination if roster is full
+    if rb_count == 3 and wr_count == 2 and qb_count == 1 and te_count == 1:
+        return [(0.0, "", {})]
+
+    if pick_idx >= len(SNAKE_PICKS):
+        return [(0.0, "", {})]
+
+    # Basic validation
+    if pick_idx < 0 or not PLAYERS or not SURVIVAL_PROBS:
+        return [(0.0, "", {})]
+
+    current_pick = SNAKE_PICKS[pick_idx]
+    counts = {"RB": rb_count, "WR": wr_count, "QB": qb_count, "TE": te_count}
+
+    # Validate position counts
+    if any(
+        count < 0 or count > POSITION_LIMITS.get(pos, 0)
+        for pos, count in counts.items()
+    ):
+        return [(0.0, "", {})]
+
+    candidates = []  # (total_value, position, details)
+
+    for pos in ["RB", "WR", "QB", "TE"]:
+        if counts[pos] < POSITION_LIMITS[pos]:
+            slot = counts[pos] + 1
+
+            try:
+                ev, debug_lines = ladder_ev_debug(
+                    pos, current_pick, slot, PLAYERS, SURVIVAL_PROBS
+                )
+
+                new_counts = counts.copy()
+                new_counts[pos] += 1
+
+                future_value, _ = dp_optimize(
+                    pick_idx + 1,
+                    new_counts["RB"],
+                    new_counts["WR"],
+                    new_counts["QB"],
+                    new_counts["TE"],
+                )
+
+                total_value = ev + future_value
+                details = {'ev': ev, 'future_value': future_value}
+                candidates.append((total_value, pos, details))
+
+            except Exception as e:
+                print(
+                    f"ERROR: Exception in K-best DP optimization for {pos} at pick {current_pick}: {e}"
+                )
+                continue
+
+    # Return top-K instead of just best
+    top_k = heapq.nlargest(k, candidates, key=lambda x: x[0])
+    return top_k if top_k else [(0.0, "", {})]
+
+
+def get_epsilon_optimal_plans(epsilon: float = 0.02) -> List[Dict]:
+    """Return all draft plans within epsilon of optimal."""
+    try:
+        # Get baseline optimal plan
+        baseline_value, baseline_pos = dp_optimize(0, 0, 0, 0, 0)
+        baseline_sequence = get_sequence_for_plan_choice(0, 0, 0, 0, 0)
+        
+        # Calculate threshold for epsilon-optimal plans
+        threshold = baseline_value * (1 - epsilon)
+        
+        epsilon_plans = []
+        # Add baseline plan
+        epsilon_plans.append({
+            'label': 'A',
+            'sequence': baseline_sequence,
+            'total_value': baseline_value,
+            'regret_pct': 0.0,
+            'first_position': baseline_pos,
+            'description': '(baseline)'
+        })
+        
+        # Try different starting positions to generate alternative plans
+        plan_idx = 1
+        for alt_first_pos in ['WR', 'RB', 'QB', 'TE']:
+            if alt_first_pos != baseline_pos and POSITION_LIMITS[alt_first_pos] > 0:
+                # Simulate choosing this position first
+                counts = {"RB": 0, "WR": 0, "QB": 0, "TE": 0}
+                counts[alt_first_pos] = 1
+                
+                # Get EV for this first choice
+                ev_first, _ = ladder_ev_debug(
+                    alt_first_pos, SNAKE_PICKS[0], 1, PLAYERS, SURVIVAL_PROBS
+                )
+                
+                # Get optimal continuation from pick 2 onward
+                future_value, _ = dp_optimize(
+                    1, counts["RB"], counts["WR"], counts["QB"], counts["TE"]
+                )
+                
+                total_value = ev_first + future_value
+                
+                # Only include if within epsilon threshold
+                if total_value >= threshold:
+                    sequence = get_sequence_for_plan_choice(0, 0, 0, 0, 0, alt_first_pos)
+                    regret_pct = ((baseline_value - total_value) / baseline_value) * 100 if baseline_value > 0 else 0.0
+                    
+                    # Determine description based on strategy
+                    description = ""
+                    if regret_pct < 1.0:
+                        description = ", strong alternative"
+                    elif alt_first_pos == "WR":
+                        description = ", WR heavy"
+                    elif alt_first_pos == "QB":
+                        description = ", early QB"
+                    elif alt_first_pos == "TE":
+                        description = ", early TE"
+                    
+                    epsilon_plans.append({
+                        'label': chr(65 + plan_idx),
+                        'sequence': sequence,
+                        'total_value': total_value,
+                        'regret_pct': regret_pct,
+                        'first_position': alt_first_pos,
+                        'description': f"(-{regret_pct:.1f}%){description}"
+                    })
+                    plan_idx += 1
+        
+        # Sort by total value (best first)
+        epsilon_plans.sort(key=lambda x: x['total_value'], reverse=True)
+        
+        # Re-label after sorting
+        for i, plan in enumerate(epsilon_plans):
+            plan['label'] = chr(65 + i)
+        
+        return epsilon_plans[:5]  # Return top 5 plans
+    except Exception as e:
+        print(f"ERROR: Exception in get_epsilon_optimal_plans: {e}")
+        return []
+
+
+def get_sequence_for_plan_choice(pick_idx: int, rb_count: int, wr_count: int, qb_count: int, te_count: int, forced_position: str = None) -> List[str]:
+    """Generate the full draft sequence following a specific plan."""
+    sequence = []
+    counts = {"RB": rb_count, "WR": wr_count, "QB": qb_count, "TE": te_count}
+    
+    for current_pick_idx in range(pick_idx, len(SNAKE_PICKS)):
+        if counts["RB"] == 3 and counts["WR"] == 2 and counts["QB"] == 1 and counts["TE"] == 1:
+            break
+            
+        # Use forced position for first pick, then use optimal
+        if current_pick_idx == pick_idx and forced_position:
+            position = forced_position
+        else:
+            _, position = dp_optimize(
+                current_pick_idx,
+                counts["RB"],
+                counts["WR"],
+                counts["QB"],
+                counts["TE"],
+            )
+        
+        if position and counts[position] < POSITION_LIMITS[position]:
+            sequence.append(position)
+            counts[position] += 1
+        else:
+            break
+    
+    return sequence
+
+
+def show_plan_menu(epsilon_plans: List[Dict]):
+    """Display the draft plan menu with epsilon-optimal alternatives."""
+    if not epsilon_plans:
+        return
+        
+    print(f"\n{'='*60}")
+    print(f"DRAFT PLAN MENU (ε=2.0%)")
+    print(f"{'='*60}")
+    
+    for plan in epsilon_plans:
+        sequence_str = "-".join(plan['sequence'])
+        description = plan.get('description', '')
+        
+        print(f"Plan {plan['label']}: {sequence_str}    EV {plan['total_value']:.1f}  {description}")
+
+
+def show_risk_variants(players: List, player_survival: Dict) -> None:
+    """Display risk-focused draft variants when envelope data is available."""
+    print(f"\n{'='*60}")
+    print("RISK-ADJUSTED VARIANTS")
+    print(f"{'='*60}")
+    
+    # Create modified player lists for different risk profiles
+    floor_players = []
+    upside_players = []
+    
+    for player in players:
+        if hasattr(player, 'low') and hasattr(player, 'high'):
+            # Create floor-focused version (weight floor heavily)
+            floor_score = player.low * 0.7 + player.points * 0.3
+            floor_player = type('Player', (), {
+                'name': player.name,
+                'position': player.position,
+                'points': floor_score,
+                'unique_id': player.unique_id,
+                'low': player.low,
+                'high': player.high
+            })()
+            floor_players.append(floor_player)
+            
+            # Create upside-focused version (weight ceiling heavily)
+            upside_score = player.high * 0.7 + player.points * 0.3
+            upside_player = type('Player', (), {
+                'name': player.name,
+                'position': player.position,
+                'points': upside_score,
+                'unique_id': player.unique_id,
+                'low': player.low,
+                'high': player.high
+            })()
+            upside_players.append(upside_player)
+        else:
+            # If no envelope data, use base player
+            floor_players.append(player)
+            upside_players.append(player)
+    
+    # Compute floor-focused strategy
+    global PLAYERS
+    original_players = PLAYERS
+    
+    try:
+        # Get baseline value first
+        PLAYERS = original_players
+        dp_optimize.cache_clear()
+        baseline_value, _ = dp_optimize(0, 0, 0, 0, 0)
+        
+        print("🛡️  FLOOR STRATEGY (Conservative, High-Floor Players):")
+        PLAYERS = floor_players
+        dp_optimize.cache_clear()
+        floor_value, floor_pos = dp_optimize(0, 0, 0, 0, 0)
+        floor_sequence = get_sequence_for_plan_choice(0, 0, 0, 0, 0)
+        
+        sequence_str = "-".join(floor_sequence)
+        regret_pct = (baseline_value - floor_value) / baseline_value * 100 if baseline_value else 0
+        
+        print(f"  Strategy: {sequence_str}")
+        print(f"  Floor EV: {floor_value:.1f} ({regret_pct:+.1f}% vs baseline)")
+        print(f"  Focus: Maximizes player floors, reduces bust risk")
+        
+        print("\n🚀 UPSIDE STRATEGY (Aggressive, High-Ceiling Players):")
+        PLAYERS = upside_players
+        dp_optimize.cache_clear()
+        upside_value, upside_pos = dp_optimize(0, 0, 0, 0, 0)
+        upside_sequence = get_sequence_for_plan_choice(0, 0, 0, 0, 0)
+        
+        sequence_str = "-".join(upside_sequence)
+        regret_pct = (baseline_value - upside_value) / baseline_value * 100 if baseline_value else 0
+        
+        print(f"  Strategy: {sequence_str}")
+        print(f"  Upside EV: {upside_value:.1f} ({regret_pct:+.1f}% vs baseline)")
+        print(f"  Focus: Maximizes player ceilings, higher variance")
+        
+    except Exception as e:
+        print(f"  Error computing risk variants: {e}")
+    finally:
+        # Always restore original players
+        PLAYERS = original_players
+        dp_optimize.cache_clear()
+
+
+def compute_pick_regret(pick_idx: int, current_counts: Dict[str, int]) -> List[Dict]:
+    """Compute regret for alternative choices at this pick."""
+    pick_number = SNAKE_PICKS[pick_idx]
+    regret_table = []
+    
+    # Get current optimal choice
+    optimal_value, optimal_pos = dp_optimize(
+        pick_idx, 
+        current_counts["RB"], 
+        current_counts["WR"], 
+        current_counts["QB"], 
+        current_counts["TE"]
+    )
+    
+    # Evaluate each alternative
+    for alt_pos in ["RB", "WR", "QB", "TE"]:
+        if current_counts[alt_pos] < POSITION_LIMITS[alt_pos]:
+            # Force this position choice
+            alt_counts = current_counts.copy()
+            alt_counts[alt_pos] += 1
+            
+            # Get immediate EV
+            slot = current_counts[alt_pos] + 1
+            immediate_ev, _ = ladder_ev_debug(alt_pos, pick_number, slot, PLAYERS, SURVIVAL_PROBS)
+            
+            # Get future EV
+            future_ev, _ = dp_optimize(
+                pick_idx + 1, 
+                alt_counts["RB"], 
+                alt_counts["WR"], 
+                alt_counts["QB"], 
+                alt_counts["TE"]
+            )
+            total_alt_ev = immediate_ev + future_ev
+            
+            regret = optimal_value - total_alt_ev
+            regret_pct = (regret / optimal_value) * 100 if optimal_value > 0 else 0
+            
+            # Add notes based on regret level
+            notes = ""
+            if regret == 0:
+                notes = "(optimal)"
+            elif regret_pct < 2.0:
+                notes = "Strong alternative"
+            elif regret_pct < 5.0:
+                notes = "Viable option"
+            elif regret_pct < 10.0:
+                notes = "Moderate drop"
+            else:
+                notes = "Significant drop"
+            
+            regret_table.append({
+                'position': alt_pos,
+                'ev': total_alt_ev,
+                'regret': regret,
+                'regret_pct': regret_pct,
+                'notes': notes
+            })
+    
+    return sorted(regret_table, key=lambda x: x['regret'])
+
+
+def show_regret_table(regret_table: List[Dict]):
+    """Display the regret table for alternative picks."""
+    if not regret_table:
+        return
+        
+    print(f"\nREGRET TABLE:")
+    print(f"{'Position':<8} {'EV':<6} {'Regret':<8} {'Notes'}")
+    for entry in regret_table:
+        regret_str = f"{entry['regret_pct']:>5.1f}%" if entry['regret_pct'] != 0 else " 0.0%"
+        print(f"{entry['position']:<8} {entry['ev']:<6.1f} {regret_str:<8} {entry['notes']}")
 
 
 def run_stability_sweep(players: List[Player]) -> None:
@@ -1613,6 +1990,26 @@ def show_value_decay_analysis(pick_idx: int, counts: Dict[str, int]):
     
     print()
     
+    # Add cliff windows analysis (Phase 1 Feature 3)
+    cliff_windows = compute_cliff_windows(pick_idx, counts)
+    if cliff_windows:
+        cliff_warnings = []
+        safe_windows = []
+        
+        for pos, window_info in cliff_windows.items():
+            if window_info['picks_to_cliff'] is not None:
+                cliff_warnings.append(f"{pos} cliff in {window_info['picks_to_cliff']} pick{'s' if window_info['picks_to_cliff'] > 1 else ''} ({window_info['cliff_drop_pct']:.0f}% drop)")
+            elif window_info['safe_window'] > 0:
+                safe_windows.append(f"{pos} safe for {window_info['safe_window']} pick{'s' if window_info['safe_window'] > 1 else ''}")
+        
+        if cliff_warnings or safe_windows:
+            print("CLIFF WINDOWS:")
+            for warning in cliff_warnings:
+                print(f"  🔴 {warning}")
+            for safe in safe_windows:
+                print(f"  ✅ {safe}")
+            print()
+    
     # Analytics data capture (if enabled) - using new recording function
     if USE_ENVELOPES:  # Only capture if envelopes enabled (as per original feedback)
         for p in position_decays:
@@ -1621,6 +2018,280 @@ def show_value_decay_analysis(pick_idx: int, counts: Dict[str, int]):
                 now_pts = p['current_points']
                 next_pts = p['current_points'] * (1 - p['pct_drops'][0]/100) if p['pct_drops'] else now_pts
                 _record_value_decay(current_pick, p['pos'], now_pts, next_pts, None)
+
+
+def compute_cliff_windows(pick_idx: int, counts: Dict[str, int], cliff_threshold: float = 0.15) -> Dict:
+    """
+    Compute how many picks until each position hits value cliff.
+    
+    Args:
+        pick_idx: Current pick index in SNAKE_PICKS
+        counts: Current position counts
+        cliff_threshold: Threshold for cliff detection (default 15%)
+        
+    Returns:
+        Dict with position keys and cliff window info
+    """
+    if pick_idx >= len(SNAKE_PICKS):
+        return {}
+        
+    current_pick = SNAKE_PICKS[pick_idx]
+    remaining_picks = SNAKE_PICKS[pick_idx:]
+    
+    windows = {}
+    
+    for pos in ["RB", "WR", "QB", "TE"]:
+        if counts[pos] < POSITION_LIMITS[pos]:
+            windows[pos] = {
+                'picks_to_cliff': None,
+                'safe_window': 0,
+                'cliff_drop_pct': 0
+            }
+            
+            pos_players = pos_sorted(PLAYERS, pos)
+            survival_matrix = SURVIVAL_PROBS.get(pos)
+            
+            if survival_matrix is not None and survival_matrix.size > 0:
+                # Get best available now using existing logic from value decay analysis
+                current_best_ev = 0
+                current_best_points = 0
+                
+                for i, player in enumerate(pos_players[:50]):
+                    if i >= survival_matrix.shape[0] or current_pick >= survival_matrix.shape[1]:
+                        break
+                        
+                    survival_prob = survival_matrix[i, current_pick]
+                    if survival_prob < 0.5:  # Using same filter as show_value_decay_analysis
+                        continue
+                        
+                    # Calculate probability all better players are taken
+                    prob_available = survival_prob
+                    for j in range(i):
+                        if j < survival_matrix.shape[0] and current_pick < survival_matrix.shape[1]:
+                            prob_available *= (1 - survival_matrix[j, current_pick])
+                    
+                    if prob_available > 0.1:  # Realistic availability
+                        current_best_points = player.points
+                        current_best_ev = prob_available * player.points
+                        break
+                
+                if current_best_points > 0:
+                    # Check each future pick for cliff
+                    for i, future_pick in enumerate(remaining_picks[1:], 1):
+                        if future_pick >= survival_matrix.shape[1]:
+                            break
+                            
+                        future_best_points = 0
+                        
+                        # Find best available at future pick
+                        for j, player in enumerate(pos_players[:50]):
+                            if j >= survival_matrix.shape[0]:
+                                break
+                                
+                            survival_prob = survival_matrix[j, future_pick]
+                            if survival_prob < 0.5:
+                                continue
+                                
+                            prob_available = survival_prob
+                            for k in range(j):
+                                if k < survival_matrix.shape[0]:
+                                    prob_available *= (1 - survival_matrix[k, future_pick])
+                            
+                            if prob_available > 0.1:
+                                future_best_points = player.points
+                                break
+                        
+                        if future_best_points > 0:
+                            drop_pct = (current_best_points - future_best_points) / current_best_points
+                            if drop_pct >= cliff_threshold:
+                                windows[pos]['picks_to_cliff'] = i
+                                windows[pos]['cliff_drop_pct'] = drop_pct * 100
+                                break
+                            elif drop_pct < 0.10:  # Safe threshold (10%)
+                                windows[pos]['safe_window'] = i
+    
+    return windows
+
+
+def compute_flexibility_index(position_values: Dict[str, Dict]) -> float:
+    """
+    Compute entropy-based flexibility score for pick decisions.
+    
+    Args:
+        position_values: Dict with position keys and value info
+        
+    Returns:
+        Flexibility index between 0.0 and 1.0
+    """
+    if not position_values:
+        return 0.0
+    
+    evs = []
+    for pos_data in position_values.values():
+        if isinstance(pos_data, dict) and 'total_value' in pos_data:
+            evs.append(pos_data['total_value'])
+        elif isinstance(pos_data, (int, float)):
+            evs.append(pos_data)
+    
+    if len(evs) <= 1:
+        return 0.0
+    
+    # Normalize to probabilities
+    ev_array = np.array(evs)
+    if ev_array.max() == ev_array.min():
+        return 1.0  # All options equal = maximum flexibility
+    
+    # Check for invalid values before operations
+    if np.any(np.isnan(ev_array)) or np.any(np.isinf(ev_array)):
+        return 0.0
+    
+    # Shift to positive ensuring no negative values
+    min_val = ev_array.min()
+    if min_val <= 0:
+        ev_array = ev_array - min_val + 1
+    
+    if ev_array.sum() == 0:
+        return 0.0
+    
+    probs = ev_array / ev_array.sum()
+    
+    # Calculate entropy
+    entropy = -np.sum(probs * np.log2(probs + 1e-12))
+    max_entropy = np.log2(len(probs))
+    
+    return entropy / max_entropy if max_entropy > 0 else 0.0
+
+
+def get_top_available_players(pos: str, pick_number: int, n: int = 3) -> List:
+    """
+    Get top N available players at a position for a given pick.
+    
+    Args:
+        pos: Position ('RB', 'WR', 'QB', 'TE')
+        pick_number: Draft pick number
+        n: Number of players to return
+        
+    Returns:
+        List of top N available players
+    """
+    if not pos:
+        return []
+        
+    pos_players = pos_sorted(PLAYERS, pos)
+    survival_matrix = SURVIVAL_PROBS.get(pos)
+    
+    if survival_matrix is None or survival_matrix.size == 0:
+        return pos_players[:n]  # Return top players by points if no survival data
+    
+    available_players = []
+    
+    for i, player in enumerate(pos_players[:50]):  # Check top 50 players
+        if i >= survival_matrix.shape[0] or pick_number >= survival_matrix.shape[1]:
+            break
+            
+        survival_prob = survival_matrix[i, pick_number]
+        if survival_prob >= 0.3:  # 30% chance or better
+            available_players.append(player)
+            if len(available_players) >= n:
+                break
+    
+    return available_players
+
+
+def build_contingency_tree(pick_idx: int, counts: Dict[str, int], max_depth: int = 2) -> Dict:
+    """
+    Build decision tree for pick contingencies.
+    
+    Args:
+        pick_idx: Current pick index
+        counts: Current position counts
+        max_depth: Depth of contingency tree
+        
+    Returns:
+        Dict with primary, secondary, tertiary options
+    """
+    if pick_idx >= len(SNAKE_PICKS):
+        return {}
+        
+    pick_number = SNAKE_PICKS[pick_idx]
+    
+    # Get primary recommendation using existing DP
+    primary_value, primary_pos = dp_optimize(
+        pick_idx, counts["RB"], counts["WR"], counts["QB"], counts["TE"]
+    )
+    
+    # Get top players for primary position
+    primary_players = get_top_available_players(primary_pos, pick_number, n=3)
+    
+    # Get regret analysis for alternatives
+    regret_table = compute_pick_regret(pick_idx, counts)
+    
+    # Build tree structure
+    tree = {
+        'primary': {
+            'position': primary_pos,
+            'players': primary_players,
+            'ev': primary_value
+        },
+        'secondary': {'position': None, 'players': [], 'regret_pct': 0},
+        'tertiary': {'position': None, 'players': [], 'regret_pct': 0}
+    }
+    
+    # Add secondary option
+    if len(regret_table) > 1:
+        secondary_pos = regret_table[1]['position']
+        secondary_players = get_top_available_players(secondary_pos, pick_number, n=2)
+        tree['secondary'] = {
+            'position': secondary_pos,
+            'players': secondary_players,
+            'regret_pct': regret_table[1]['regret_pct']
+        }
+    
+    # Add tertiary option
+    if len(regret_table) > 2:
+        tertiary_pos = regret_table[2]['position']
+        tertiary_players = get_top_available_players(tertiary_pos, pick_number, n=2)
+        tree['tertiary'] = {
+            'position': tertiary_pos,
+            'players': tertiary_players,
+            'regret_pct': regret_table[2]['regret_pct']
+        }
+    
+    return tree
+
+
+def show_contingency_tree(tree: Dict, pick_number: int):
+    """
+    Display the contingency decision tree.
+    
+    Args:
+        tree: Contingency tree from build_contingency_tree()
+        pick_number: Current pick number
+    """
+    if not tree:
+        return
+        
+    print(f"\nCONTINGENCY PLAYBOOK (Pick {pick_number}):")
+    
+    # Primary option
+    primary = tree.get('primary', {})
+    if primary.get('position') and primary.get('players'):
+        player_names = [p.name for p in primary['players'][:2]]
+        print(f"🎯 PRIMARY: {primary['position']} → {', '.join(player_names)}")
+    
+    # Secondary option
+    secondary = tree.get('secondary', {})
+    if secondary.get('position') and secondary.get('players'):
+        player_names = [p.name for p in secondary['players'][:2]]
+        regret = secondary.get('regret_pct', 0)
+        print(f"📋 IF GONE: {secondary['position']} → {', '.join(player_names)} (-{regret:.1f}% EV)")
+    
+    # Tertiary option
+    tertiary = tree.get('tertiary', {})
+    if tertiary.get('position') and tertiary.get('players'):
+        player_names = [p.name for p in tertiary['players'][:2]]
+        regret = tertiary.get('regret_pct', 0)
+        print(f"🔄 LAST RESORT: {tertiary['position']} → {', '.join(player_names)} (-{regret:.1f}% EV)")
 
 
 def show_clean_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int], favorites: set):
@@ -1647,6 +2318,10 @@ def show_clean_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, 
     
     # Show value decay analysis
     show_value_decay_analysis(pick_idx, counts)
+    
+    # Add regret analysis for alternative picks
+    regret_table = compute_pick_regret(pick_idx, counts)
+    show_regret_table(regret_table)
     
     # Note: "also available" sections removed to reduce redundancy with positional outlook
     # Users can reference the positional outlook section below for other positions
@@ -1890,6 +2565,8 @@ def main():
         for key, data_list in player_survival.items():
             simple_survival_probs[key] = np.mean(data_list) if data_list else 0.0
         SURVIVAL_PROBS = get_position_survival_matrix(players, simple_survival_probs)
+        # Update player_survival to use simple probabilities for the rest of the code
+        player_survival = simple_survival_probs
     else:
         SURVIVAL_PROBS = get_position_survival_matrix(players, player_survival)
 
@@ -1942,6 +2619,10 @@ def main():
     # Calculate final expected value
     dp_optimize.cache_clear()
     total_value, _ = dp_optimize(0, 0, 0, 0, 0)
+
+    # Display epsilon-optimal plans menu first
+    epsilon_plans = get_epsilon_optimal_plans(epsilon=0.02)
+    show_plan_menu(epsilon_plans)
 
     # Display results
     print("\n" + "=" * 50)
@@ -2013,6 +2694,10 @@ def main():
     print("• Positional outlook %: Fantasy points relative to baseline player")
     print("• Best-Available: Chance this player will be your best option among available players")
     print("─" * 60)
+    
+    # Add risk variants if envelope data is available
+    if USE_ENVELOPES and hasattr(players[0] if players else None, 'low') and hasattr(players[0] if players else None, 'high'):
+        show_risk_variants(players, player_survival)
     
     # Export analytics data if enabled
     _export_pick_run()
