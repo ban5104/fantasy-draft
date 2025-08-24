@@ -2,7 +2,7 @@
 
 A data-driven draft optimization tool that uses dynamic programming and Monte Carlo simulation to determine optimal fantasy football draft strategies. Instead of evaluating individual players, this system uses a novel "Dynamic Programming over Positions" approach to maximize expected fantasy points across all draft picks.
 
-**Recent Major Enhancements**: Significant correctness fixes, 5-10x performance improvements, and enhanced debugging capabilities with full reproducibility support.
+**Recent Major Enhancements**: Architectural refactoring with simplified data loading, golden master testing framework, elimination of circular imports, and significant correctness fixes with 5-10x performance improvements.
 
 ## Why This Approach
 
@@ -74,6 +74,9 @@ python scripts/dp_draft_optimizer_debug.py --stability-sweep
 # Custom parameters (overrides mode presets)
 python scripts/dp_draft_optimizer_debug.py --sims 10000 --randomness 0.4 --pool-size 20
 
+# Custom ESPN data source
+python scripts/dp_draft_optimizer_debug.py --mode stable --espn-file data/espn_algorithm_20250824.csv
+
 # Full feature set
 python scripts/dp_draft_optimizer_debug.py --export-csv --export-simulations --visualize --save-plots
 ```
@@ -81,17 +84,20 @@ python scripts/dp_draft_optimizer_debug.py --export-csv --export-simulations --v
 ### Data Analysis
 
 ```bash
-# Launch Jupyter for detailed Monte Carlo analysis
+# Launch Jupyter for Monte Carlo statistical analysis
 jupyter notebook jupyter-notebooks/monte_carlo_statistical_analysis.ipynb
 
-# View interactive visualization dashboard
-jupyter notebook jupyter-notebooks/monte_carlo_visualization.ipynb
+# Model comparison and strategy analysis
+jupyter notebook jupyter-notebooks/model_comparison_analysis.ipynb
+
+# Value dropoff visualization
+jupyter notebook jupyter-notebooks/value_dropoff_charts.ipynb
 ```
 
 ## How It Works
 
 ### 1. Data Pipeline
-Merges ESPN projections with fantasy point rankings using fuzzy string matching, with automatic D/ST and K filtering for cleaner matching.
+Uses simplified hierarchical matching system with exact match priority, achieving 99.6% exact matches. Automatically filters D/ST and K positions with configurable ESPN data sources.
 
 ### 2. Monte Carlo Simulation
 Simulates thousands of draft scenarios with rank-weighted Gaussian noise selection and 5-10x performance optimization to compute **survival probabilities** - the likelihood each player will be available at each of your picks.
@@ -124,26 +130,31 @@ CANDIDATE_POOL_SIZE = 15    # Players each team considers per pick
 
 ## Data Requirements
 
-Place these CSV files in the `data/` directory:
+The system uses flexible data loading with hierarchical matching:
 
-- `espn_projections_20250814.csv` - ESPN player projections and rankings
-- `rankings_top300_20250814.csv` - Fantasy point projections by position
+- **ESPN Projections**: Any CSV file with columns: `player_name`, `position`, `overall_rank`
+  - Configurable via `--espn-file` parameter  
+  - Available data: `data/probability-models-draft/espn_projections_20250814.csv`, `espn_algorithm_20250824.csv`
+- **Fantasy Rankings**: `data/rankings_top300_20250814.csv` with columns: `PLAYER`, `FANTASY_PTS`
+- **Additional Data**: ADP data, actual draft results, and other probability models in `data/probability-models-draft/`
 
-**Required Columns:**
-- ESPN data: `player_name`, `position`, `overall_rank`
-- Rankings data: `PLAYER`, `FANTASY_PTS`
+**Data Quality**: 99.6% exact matches with 4-tier hierarchical matching system and 92% fuzzy threshold.
 
 ## File Structure
 
 ```
-fantasy-draft/
+fantasy-draft-fav-players/
 ├── scripts/
-│   └── dp_draft_optimizer_debug.py    # Main optimizer with debug output
-├── archived/
-│   └── dp_draft_optimizer.py          # Original simplified implementation
-├── data/                              # Player data and simulation results
-├── jupyter-notebooks/                 # Analysis and visualization tools
-├── specs/                             # Theoretical foundation and planning docs
+│   ├── dp_draft_optimizer_debug.py    # Main optimizer (self-contained)
+│   └── tests/                         # Unit and integration tests
+├── data/
+│   ├── probability-models-draft/      # ESPN projections, ADP, draft results
+│   ├── rankings_top300_20250814.csv   # Fantasy point rankings
+│   └── draft_day_cheat_sheet.txt      # Quick reference
+├── jupyter-notebooks/                 # Analysis and visualization (3 notebooks)
+├── tests/golden/                      # Golden master regression tests
+├── specs/                             # Mathematical theory and planning
+├── archived/                          # Previous implementations
 └── requirements.txt                   # Python dependencies
 ```
 

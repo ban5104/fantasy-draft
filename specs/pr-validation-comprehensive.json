@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "name": "pr-validation-comprehensive",
+  "description": "Comprehensive test suite to validate fantasy football draft optimizer is ready for safe PR creation",
+  "generated_by": "spec-generator",
+  "generated_at": "2025-01-22T00:00:00Z",
+  "acceptance": [
+    {
+      "id": "golden-master-regression-test",
+      "type": "custom",
+      "description": "Verify optimizer produces identical results to golden master baseline for regression protection",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && python scripts/tests/test_golden_master.py compare",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "comprehensive-optimizer-validation",
+      "type": "custom", 
+      "description": "Run full optimizer test with 10K simulations and CSV export validation",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && python scripts/tests/test_optimizer.py",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "favorites-loading-functionality",
+      "type": "unit",
+      "description": "Validate favorites loading from cheat sheet works correctly",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && python scripts/tests/test_favorites.py",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "fast-mode-smoke-test", 
+      "type": "custom",
+      "description": "Quick smoke test using fast mode (100 simulations) to verify basic functionality",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && python scripts/dp_draft_optimizer_debug.py --mode fast --seed 42",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "stable-mode-production-test",
+      "type": "custom",
+      "description": "Production-quality test with 5000 simulations and CSV export",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && python scripts/dp_draft_optimizer_debug.py --mode stable --seed 42",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "data-integrity-validation",
+      "type": "static",
+      "description": "Verify all required data files exist and have correct structure",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && test -f data/probability-models-draft/espn_projections_20250814.csv && test -f data/probability-models-draft/realtime_adp_20250822.csv && test -f data/probability-models-draft/actual_draft_results_20250823.csv && test -f data/rankings_top300_20250814.csv",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "golden-test-outputs-exist",
+      "type": "static",
+      "description": "Verify golden master test files exist for regression comparison",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && test -f tests/golden/mc_config_espn.csv && test -f tests/golden/mc_player_survivals_espn.csv && test -f tests/golden/mc_position_summary_espn.csv",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "project-structure-validation",
+      "type": "static",
+      "description": "Verify critical project files and directories exist with proper structure",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && test -f scripts/dp_draft_optimizer_debug.py && test -d scripts/tests && test -d jupyter-notebooks && test -f requirements.txt && test -f pyproject.toml",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "dependencies-validation",
+      "type": "custom",
+      "description": "Verify all Python dependencies are correctly installed and importable",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && python -c 'import pandas, numpy, matplotlib, seaborn, scipy; print(\"All dependencies imported successfully\")'",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "architectural-constraints-check",
+      "type": "static",
+      "description": "Verify main optimizer script remains unified (single file architecture)",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && test $(wc -l < scripts/dp_draft_optimizer_debug.py) -gt 1500 && test $(find scripts/ -name '*.py' -not -path 'scripts/tests/*' | wc -l) -eq 1",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "notebook-visualization-only-check",
+      "type": "static", 
+      "description": "Verify Jupyter notebooks exist but contain only visualization code (no complex calculations)",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && test $(find jupyter-notebooks/ -name '*.ipynb' | wc -l) -eq 3 && test -f jupyter-notebooks/model_comparison_analysis.ipynb",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "debug-mode-visualization-test",
+      "type": "custom",
+      "description": "Run debug mode with minimal simulations to test visualization pipeline",
+      "command": "cd /Users/ben/projects/fantasy-draft-fav-players && python scripts/dp_draft_optimizer_debug.py --mode debug --sims 50 --seed 42",
+      "expect": {
+        "exitCode": 0
+      }
+    }
+  ],
+  "policy": {
+    "risk_level": "medium",
+    "auto_merge_if_low_risk": false,
+    "migration_requires_manual_approval": true
+  }
+}
