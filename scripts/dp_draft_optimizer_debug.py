@@ -1293,16 +1293,16 @@ def show_technical_summary():
     if mc_example:
         print(f"\n1. MONTE CARLO PICK EXAMPLE (Sim {mc_example['sim']}, Pick {mc_example['pick_num']}):")
         print(f"   How the algorithm simulates other teams' draft picks:")
-        print(f"   Randomness Level: {mc_example['randomness_level']} (affects selection variance)")
+        print(f"   Temperature: {mc_example.get('temperature', RANDOMNESS_LEVEL)} (affects selection variance)")
         print(f"   Available Candidate Pool (top 5 shown):")
         for i, (name, pos, rank) in enumerate(mc_example['candidates']):
             selected = "← SELECTED" if i == mc_example['choice_idx'] else ""
             print(f"     {name[:20]:20} {pos:2} (ESPN #{rank:2}) {selected}")
         picked_name, picked_pos, picked_rank = mc_example['picked_player']
         print(f"   Result: {picked_name} ({picked_pos}, ESPN #{picked_rank}) was selected")
-        print(f"   Model: {mc_example.get('model', 'Gumbel/Plackett-Luce')} with temperature={mc_example.get('temperature', mc_example.get('randomness_level', 0.3))}")
+        print(f"   Model: {mc_example.get('model', 'Gumbel/Plackett-Luce')} with temperature={mc_example.get('temperature', RANDOMNESS_LEVEL)}")
         print(f"   Formula: utility = -rank, pick = argmax(utility/temperature + gumbel_noise)")
-        print(f"   This process repeats {num_sims} times to calculate survival probabilities.")
+        print(f"   This process repeats thousands of times to calculate survival probabilities.")
     else:
         print(f"\n1. MONTE CARLO PICK EXAMPLE: Not captured")
     
