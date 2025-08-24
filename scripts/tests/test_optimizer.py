@@ -17,13 +17,15 @@ def run_optimizer_test():
     project_root = Path(__file__).parent.parent.parent
     os.chdir(project_root)
 
-    # Standard test command with consistent parameters
+    # Standard test command with new simplified interface
     cmd = [
         "python3",
         "scripts/dp_draft_optimizer_debug.py",
-        "--sims",
-        "10000",
-        "--export-csv",
+        "--standard",
+        "--position",
+        "5",
+        "--seed",
+        "42",
         "--espn-file",
         "data/probability-models-draft/espn_projections_20250814.csv",
     ]

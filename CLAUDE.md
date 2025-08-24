@@ -27,23 +27,23 @@ python scripts/tests/test_favorites.py
 
 ### Running the Optimizer
 ```bash
-# Quick results (100 simulations)
-python scripts/dp_draft_optimizer_debug.py --mode fast
+# Quick results (100 simulations, basic output)
+python scripts/dp_draft_optimizer_debug.py --quick
 
-# Production quality (5000 simulations, CSV exports)
-python scripts/dp_draft_optimizer_debug.py --mode stable
+# Standard mode (5000 simulations, full analytics and exports) - DEFAULT
+python scripts/dp_draft_optimizer_debug.py --standard
 
-# Full analysis with visualizations
-python scripts/dp_draft_optimizer_debug.py --mode debug
+# Debug mode (standard + debug output and visualizations)
+python scripts/dp_draft_optimizer_debug.py --debug
+
+# Specify your draft position (1-14, auto-calculates snake picks)
+python scripts/dp_draft_optimizer_debug.py --standard --position 8
 
 # With envelope projections for uncertainty analysis
-python scripts/dp_draft_optimizer_debug.py --mode stable --envelope-file data/my_projections.csv
+python scripts/dp_draft_optimizer_debug.py --standard --envelope-file data/my_projections.csv
 
-# Enhanced analytics data capture
-python scripts/dp_draft_optimizer_debug.py --mode stable --capture-analytics
-
-# Reproducible results
-python scripts/dp_draft_optimizer_debug.py --mode stable --seed 42
+# Reproducible results with seed
+python scripts/dp_draft_optimizer_debug.py --standard --position 5 --seed 42
 ```
 
 ### Dependencies
@@ -67,7 +67,8 @@ pip install -r requirements.txt
 ## Configuration Parameters
 
 Key variables in main script:
-- `SNAKE_PICKS` - Draft pick positions (currently 14-team: [5, 24, 33, 52, 61, 80, 89])
+- `DRAFT_POSITION` - Your pick number in round 1 (1-14, set via `--position` flag)
+- `SNAKE_PICKS` - Auto-calculated from draft position (e.g., pos 5: [5, 24, 33, 52, 61, 80, 89])
 - `POSITION_LIMITS` - Roster targets ({'RB': 3, 'WR': 2, 'QB': 1, 'TE': 1})
 - `RANDOMNESS_LEVEL` - Draft unpredictability (0.1-0.7, default 0.3)
 - `CANDIDATE_POOL_SIZE` - Players considered per pick (5-25, default 15)
@@ -82,7 +83,7 @@ Key variables in main script:
 
 - ESPN projections: CSV with player_name, position, overall_rank
   - Available: `espn_projections_20250814.csv`, `espn_algorithm_20250824.csv`
-  - Configurable via `--espn-file` parameter
+  - Configurable via `--espn-file` parameter (optional)
 - Fantasy rankings: `rankings_top300_20250814.csv` with PLAYER, FANTASY_PTS
 - Envelope projections: CSV with flexible column names for projection ranges
   - Player: `name`, `player`, `player_name`
@@ -94,7 +95,7 @@ Key variables in main script:
 - Additional data: ADP, actual draft results in `probability-models-draft/`
 - All data follows standardized format with 99.6% exact matching
 
-### Analytics Output Files (when envelope/analytics enabled)
+### Analytics Output Files (standard/debug modes)
 - `pick_candidates.csv` - Top candidates per pick with envelope metrics
 - `value_decay.csv` - Value dropoff analysis between consecutive picks
 - `pos_outlook.csv` - Positional availability trends across rounds

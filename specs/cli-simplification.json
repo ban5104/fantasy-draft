@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "name": "cli-simplification",
+  "description": "Simplify fantasy draft optimizer CLI from 15+ confusing flags to 3 clean modes with auto-calculated draft positions",
+  "generated_by": "spec-generator",
+  "generated_at": "2025-01-19T06:00:00Z",
+  "acceptance": [
+    {
+      "id": "regression-golden-master",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/tests/test_golden_master.py",
+      "description": "Ensures core optimization algorithm produces identical results after CLI changes",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "quick-mode-basic-functionality",
+      "type": "custom", 
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && timeout 60 python scripts/dp_draft_optimizer_debug.py --quick --position 5",
+      "description": "Validates quick mode runs 100 simulations with basic output in under 60 seconds",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "standard-mode-full-analytics",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && timeout 180 python scripts/dp_draft_optimizer_debug.py --standard --position 5 --seed 42",
+      "description": "Validates standard mode runs 5000 simulations with full analytics and CSV exports",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "debug-mode-with-visualizations",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && timeout 300 python scripts/dp_draft_optimizer_debug.py --debug --position 8 --seed 123",
+      "description": "Validates debug mode includes all standard features plus debug output and visualizations",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "auto-position-calculation",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/dp_draft_optimizer_debug.py --quick --position 1 --seed 42 | grep -E 'Draft position #1|Your picks.*\\[1, 28, 29, 56, 57, 84, 85\\]'",
+      "description": "Validates automatic snake draft pick calculation for position 1 in 14-team league",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "position-boundary-validation",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/dp_draft_optimizer_debug.py --quick --position 15 2>&1 | grep -i 'invalid choice'",
+      "description": "Validates position parameter rejects invalid values outside 1-14 range",
+      "expect": {
+        "exitCode": 2
+      }
+    },
+    {
+      "id": "envelope-file-integration",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/dp_draft_optimizer_debug.py --standard --position 5 --envelope-file data/rankings_top300_20250814.csv --seed 42",
+      "description": "Validates envelope file parameter still works for uncertainty analysis",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "csv-export-validation",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/dp_draft_optimizer_debug.py --standard --position 5 --seed 42 && ls -la data/output-simulations/mc_config_espn.csv data/output-simulations/mc_player_survivals_espn.csv data/output-simulations/mc_position_summary_espn.csv",
+      "description": "Validates standard mode automatically exports required CSV files to output-simulations directory",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "comprehensive-optimizer-test",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/tests/test_optimizer.py",
+      "description": "Runs comprehensive optimizer test suite to validate all functionality",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "favorites-unit-tests",
+      "type": "unit",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/tests/test_favorites.py",
+      "description": "Validates favorites functionality remains intact after CLI changes",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "default-mode-behavior",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && timeout 180 python scripts/dp_draft_optimizer_debug.py --position 5 --seed 42",
+      "description": "Validates that running without mode flags defaults to standard mode behavior",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "mutually-exclusive-modes",
+      "type": "custom",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/dp_draft_optimizer_debug.py --quick --standard 2>&1 | grep -i 'not allowed'",
+      "description": "Validates that quick, standard, and debug modes are mutually exclusive",
+      "expect": {
+        "exitCode": 2
+      }
+    }
+  ],
+  "policy": {
+    "risk_level": "medium",
+    "auto_merge_if_low_risk": false,
+    "migration_requires_manual_approval": true
+  }
+}

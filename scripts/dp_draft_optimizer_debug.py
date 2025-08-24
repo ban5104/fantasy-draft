@@ -45,6 +45,18 @@ class Player(NamedTuple):
         return f"{self.name}_{self.position}"
 
 
+def calculate_snake_picks(position: int, league_size: int = 14, rounds: int = 7) -> List[int]:
+    """Calculate snake draft picks for given position."""
+    picks = []
+    for round_num in range(1, rounds + 1):
+        if round_num % 2 == 1:  # Odd rounds go forward
+            pick = (round_num - 1) * league_size + position
+        else:  # Even rounds go backward
+            pick = round_num * league_size - position + 1
+        picks.append(pick)
+    return picks
+
+
 def strip_team_abbrev(name: str) -> str:
     """
     Remove team abbreviation from player name.
@@ -95,11 +107,14 @@ def pos_sorted(players: list, position: str) -> list:
 # CONFIGURATION - Adjust these parameters to control the simulation
 # ==============================================================================
 
-# Your draft picks in the snake draft (14-team league example)
-SNAKE_PICKS = [5, 24, 33, 52, 61, 80, 89]  # Update with your actual picks
+# Draft configuration - will be updated based on --position argument
+DRAFT_POSITION = 5  # Default position, overridden by --position flag
+LEAGUE_SIZE = 14    # 14-team league
+TOTAL_ROUNDS = 14   # Total rounds to draft
+SNAKE_PICKS = []    # Calculated automatically from position
 
-# Maximum roster slots you need to fill
-POSITION_LIMITS = {"RB": 3, "WR": 2, "QB": 1, "TE": 1}
+# Maximum roster slots you need to fill (for first 7 rounds optimization)
+POSITION_LIMITS = {"RB": 3, "WR": 2, "QB": 1, "TE": 1}  # Optimizing first 7 picks only
 
 # ======= Envelope + Export Add-Ons (non-invasive) =======
 # Put near the top of your file (after numpy/pandas imports)
@@ -1697,134 +1712,97 @@ def main():
     logger = logging.getLogger(__name__)
     
     parser = argparse.ArgumentParser(
-        description="DP Draft Optimizer with Monte Carlo Simulation"
+        description="Fantasy Draft Optimizer - Monte Carlo Simulation"
     )
+    
+    # Primary modes (mutually exclusive)
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--quick", 
+        action="store_true",
+        help="Quick mode: 100 simulations, basic output"
+    )
+    mode_group.add_argument(
+        "--standard", 
+        action="store_true",
+        help="Standard mode: 5000 simulations, full analytics and exports (default)"
+    )
+    mode_group.add_argument(
+        "--debug", 
+        action="store_true",
+        help="Debug mode: Standard + debug output and visualizations"
+    )
+    
+    # Draft position
     parser.add_argument(
-        "--sims",
+        "--position",
         type=int,
-        default=1000,
-        help="Number of Monte Carlo simulations (default: 1000)",
+        default=5,
+        choices=range(1, 15),
+        help="Your draft position (1-14, default: 5)"
+    )
+    
+    # Optional overrides
+    parser.add_argument(
+        "--seed", 
+        type=int, 
+        help="Random seed for reproducible results"
     )
     parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=True,
-        help="Enable debug mode (default: True)",
-    )
-    parser.add_argument(
-        "--visualize",
-        action="store_true",
-        help="Generate Monte Carlo visualization dashboard",
-    )
-    parser.add_argument(
-        "--save-plots",
-        action="store_true",
-        help="Save visualization plots as PNG files",
-    )
-    parser.add_argument(
-        "--export-csv",
-        action="store_true",
-        help="Export Monte Carlo results to CSV files",
-    )
-    parser.add_argument(
-        "--export-simulations",
-        action="store_true",
-        help="Export individual simulation pick data for scatter plots",
-    )
-
-    # Simulation tuning parameters (override config file values)
-    parser.add_argument(
-        "--randomness", type=float, help="Randomness level 0.0-1.0 (override config)"
-    )
-    parser.add_argument(
-        "--pool-size", type=int, help="Candidate pool size (override config)"
-    )
-    parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
-    parser.add_argument(
-        "--stability-sweep",
-        action="store_true",
-        help="Run parameter stability sweep to test robustness",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["fast", "stable", "debug"],
-        help="Preset configurations (overrides individual params)",
-    )
-    parser.add_argument(
-        "--data-source",
-        default="espn",
-        help="Data source identifier for output files (default: espn). Can be any string for model comparison.",
-    )
-    parser.add_argument(
-        "--espn-file", 
+        "--espn-file",
         type=str,
         default="data/probability-models-draft/espn_projections_20250814.csv",
-        help="Path to ESPN projections CSV file (default: data/probability-models-draft/espn_projections_20250814.csv)"
-    )
-    parser.add_argument(
-        "--enhanced-stats",
-        action="store_true",
-        help="Export enhanced statistical distributions (std, percentiles, CI)",
-    )
-    parser.add_argument(
-        "--capture-analytics",
-        action="store_true",
-        help="Enable analytics data capture for detailed pick analysis export",
-    )
-    parser.add_argument(
-        "--export-parquet",
-        action="store_true",
-        help="Export analytics data in Parquet format instead of CSV",
+        help="Path to ESPN projections CSV (default: espn_projections_20250814.csv)"
     )
     parser.add_argument(
         "--envelope-file",
         type=str,
-        help="Path to envelope projections CSV file (enables envelope projection support)",
+        help="Path to envelope projections CSV for uncertainty analysis"
     )
+    
     args = parser.parse_args()
 
     # Apply command-line overrides
-    global RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE, USE_ENVELOPES, EXPORT_FORMAT, ENVELOPE_FILE
-
-    # Handle preset modes
-    if args.mode:
-        if args.mode == "fast":
-            args.sims = 100
-            args.debug = False
-            RANDOMNESS_LEVEL = 0.3
-        elif args.mode == "stable":
-            args.sims = 5000
-            args.export_csv = True
-            RANDOMNESS_LEVEL = 0.3
-        elif args.mode == "debug":
-            args.sims = 1000
-            args.debug = True
-            args.visualize = True
-            args.enhanced_stats = True
-            args.export_csv = True
-    if args.randomness is not None:
-        RANDOMNESS_LEVEL = max(0.0, min(1.0, args.randomness))  # Clamp to valid range
-    if args.pool_size is not None:
-        CANDIDATE_POOL_SIZE = max(3, min(50, args.pool_size))  # Reasonable bounds
-
-    # Set random seed for reproducibility
-    if args.seed is not None:
-        np.random.seed(args.seed)
-        print(f"Random seed set to: {args.seed}")
+    global RANDOMNESS_LEVEL, USE_ENVELOPES, EXPORT_FORMAT, ENVELOPE_FILE, SNAKE_PICKS
     
-    # Apply new analytics flags (following exact feedback structure)
-    if args.capture_analytics:
-        USE_ENVELOPES = True  # Enable analytics capture via envelopes flag
-        print("Analytics data capture enabled (via USE_ENVELOPES)")
+    # Calculate snake picks based on position
+    SNAKE_PICKS = calculate_snake_picks(args.position, LEAGUE_SIZE, 7)  # 7 rounds for optimization
+    print(f"\nDraft position #{args.position} in {LEAGUE_SIZE}-team league")
+    print(f"Your picks (first 7 rounds): {SNAKE_PICKS}")
     
-    if args.export_parquet:
-        EXPORT_FORMAT = "parquet"
-        print("Parquet export format enabled")
+    # Set mode configurations
+    if args.quick:
+        num_sims = 100
+        export_csv = False
+        visualize = False
+        debug_mode = False
+        USE_ENVELOPES = False
+        print("Mode: QUICK (100 simulations, basic output)")
+    elif args.debug:
+        num_sims = 5000
+        export_csv = True
+        visualize = True
+        debug_mode = True
+        USE_ENVELOPES = True  # Enable everything in debug
+        print("Mode: DEBUG (5000 simulations, full analytics + debug output)")
+    else:  # Standard mode (default)
+        num_sims = 5000
+        export_csv = True
+        visualize = False
+        debug_mode = False
+        USE_ENVELOPES = True  # Standard includes all analytics
+        print("Mode: STANDARD (5000 simulations, full analytics and exports)")
     
+    # Apply envelope file if provided
     if args.envelope_file:
         ENVELOPE_FILE = args.envelope_file
         USE_ENVELOPES = True
-        print(f"Envelope projections enabled: {ENVELOPE_FILE}")
+        print(f"Using envelope projections: {ENVELOPE_FILE}")
+    
+    # Set random seed if provided
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        print(f"Random seed: {args.seed}")
 
     # Clear capture examples and analytics data for fresh run
     clear_capture_examples()
@@ -1855,7 +1833,7 @@ def main():
         logger.info(f"Could not load favorites: {e}")
 
     # Show top players by position in debug mode
-    if args.mode == 'debug':
+    if debug_mode:
         print("\nTop 3 players by position (with fantasy points):")
         for pos in ["RB", "WR", "QB", "TE"]:
             # CRITICAL FIX: Use points-sorted order to match ladder calculations
@@ -1867,17 +1845,17 @@ def main():
     print(f"\n{'='*60}")
     print("SIMULATION CONFIGURATION")
     print(f"{'='*60}")
-    print(f"Data Source: {args.data_source.upper()} rankings")
+    print(f"Data Source: ESPN rankings")
     print(
         f"Randomness Level: {RANDOMNESS_LEVEL} ({'Very Low' if RANDOMNESS_LEVEL <= 0.15 else 'Low' if RANDOMNESS_LEVEL <= 0.25 else 'Moderate' if RANDOMNESS_LEVEL <= 0.4 else 'High' if RANDOMNESS_LEVEL <= 0.6 else 'Very High'})"
     )
     print(f"Candidate Pool Size: {CANDIDATE_POOL_SIZE} players")
-    print(f"Number of Simulations: {args.sims}")
+    print(f"Number of Simulations: {num_sims}")
     print(f"{'='*60}")
 
-    logger.info(f"Running {args.sims} Monte Carlo simulations...")
+    logger.info(f"Running {num_sims} Monte Carlo simulations...")
     player_survival = monte_carlo_survival_realistic(
-        players, args.sims, export_simulation_data=args.export_simulations, data_source=args.data_source, enhanced_stats=args.enhanced_stats
+        players, num_sims, export_simulation_data=export_csv, data_source="espn", enhanced_stats=USE_ENVELOPES
     )
 
     # Setup global data for DP optimization
@@ -1885,7 +1863,7 @@ def main():
     PLAYERS = players
     
     # Convert enhanced stats back to simple probabilities for DP optimization
-    if args.enhanced_stats:
+    if USE_ENVELOPES:
         simple_survival_probs = {}
         for key, data_list in player_survival.items():
             simple_survival_probs[key] = np.mean(data_list) if data_list else 0.0
@@ -1894,29 +1872,30 @@ def main():
         SURVIVAL_PROBS = get_position_survival_matrix(players, player_survival)
 
     # Handle optional exports and visualization
-    if args.export_csv:
+    if export_csv:
         export_mc_results_to_csv(
-            players, player_survival, SNAKE_PICKS, args.sims, args.data_source, args.seed, args.enhanced_stats
+            players, player_survival, SNAKE_PICKS, num_sims, "espn", args.seed, USE_ENVELOPES
         )
 
-    if args.visualize:
+    if visualize:
         if VISUALIZATION_AVAILABLE:
-            create_simple_dashboard(players, player_survival, SNAKE_PICKS, args.sims)
+            create_simple_dashboard(players, player_survival, SNAKE_PICKS, num_sims)
         else:
             print(
                 "Visualization not available. Install matplotlib: pip install matplotlib"
             )
 
     # Show technical summary for stable/debug modes
-    if args.mode in ['stable', 'debug']:
+    if export_csv or debug_mode:
         show_technical_summary()
     
-    if args.mode == 'debug':
+    if debug_mode:
         show_top_players_survival()
 
-    if args.stability_sweep:
-        run_stability_sweep(players)
-        return  # Exit after stability sweep
+    # Stability sweep removed for simplicity
+    # if args.stability_sweep:
+    #     run_stability_sweep(players)
+    #     return  # Exit after stability sweep
 
     print("\nOptimizing draft strategy...")
 
@@ -1925,7 +1904,7 @@ def main():
 
     for pick_idx in range(len(SNAKE_PICKS)):
         # Route output based on mode
-        if args.mode == 'debug':
+        if debug_mode:
             show_pick_analysis(pick_idx, SNAKE_PICKS[pick_idx], counts)
         else:  # fast or stable mode
             show_clean_pick_analysis(pick_idx, SNAKE_PICKS[pick_idx], counts, favorites)
@@ -1936,7 +1915,7 @@ def main():
         sequence.append(position)
         if position:
             counts[position] += 1
-            if args.mode == 'debug':
+            if debug_mode:
                 print(f"\n>>> DP DECISION: Draft {position} (Total EV={value:.1f})")
 
     # Calculate final expected value
@@ -1948,7 +1927,7 @@ def main():
     print("OPTIMAL DRAFT STRATEGY SUMMARY")
     print("=" * 50)
     print(f"Expected Total Points: {total_value:.2f}")
-    print(f"Monte Carlo Simulations: {args.sims}")
+    print(f"Monte Carlo Simulations: {num_sims}")
     print(f"Snake Draft Picks: {SNAKE_PICKS}")
     print()
 
