@@ -101,6 +101,170 @@ SNAKE_PICKS = [5, 24, 33, 52, 61, 80, 89]  # Update with your actual picks
 # Maximum roster slots you need to fill
 POSITION_LIMITS = {"RB": 3, "WR": 2, "QB": 1, "TE": 1}
 
+# ======= Envelope + Export Add-Ons (non-invasive) =======
+# Put near the top of your file (after numpy/pandas imports)
+
+ENVELOPE_FILE = ENVELOPE_FILE if "ENVELOPE_FILE" in globals() else None   # set a path or leave None
+USE_ENVELOPES = True
+EXPORT_DIR = "data/output-simulations"
+EXPORT_FORMAT = "parquet"  # falls back to csv automatically
+
+import os, json, hashlib, time, sys, platform
+import numpy as np, pandas as pd
+
+def _canon(s: str) -> str:
+    s = (s or "").lower()
+    for tok in [" jr.", " jr", " sr.", " sr", " iii", " ii", ".", ",", "'", "\"", "(", ")", "[", "]"]:
+        s = s.replace(tok, " ")
+    return " ".join(s.split())
+
+def _safe_export(df: pd.DataFrame, name: str) -> str:
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    base = os.path.join(EXPORT_DIR, name)
+    if EXPORT_FORMAT == "parquet":
+        try:
+            import pyarrow  # noqa: F401
+            df.to_parquet(base + ".parquet", index=False)
+            return base + ".parquet"
+        except Exception:
+            pass
+    df.to_csv(base + ".csv", index=False)
+    return base + ".csv"
+
+def _hash_file(path: str) -> str:
+    if not path or not os.path.exists(path): return ""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1<<20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def _load_envelopes(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    cols = {c.lower().strip(): c for c in df.columns}
+    def pick(*opts):
+        for o in opts:
+            if o in cols: return cols[o]
+        raise KeyError(f"Missing column: one of {opts}")
+    name_col = cols.get("name") or cols.get("player") or cols.get("player_name")
+    pos_col  = pick("pos","position")
+    low_col  = pick("low","floor","p10")
+    mid_col  = pick("proj","projection","mode","median","p50","center")
+    high_col = pick("high","ceiling","p90")
+    df = df.rename(columns={name_col:"name", pos_col:"pos", low_col:"low", mid_col:"proj", high_col:"high"})
+    df = df[df["high"] >= df["low"]]
+    df["name_key"] = df["name"].map(_canon)
+    eq = df["high"] == df["low"]
+    df.loc[eq, "high"] = df.loc[eq, "high"] + 1e-6
+    return df[["name","pos","low","proj","high","name_key"]]
+
+# Note: Envelope integration happens in load_and_merge_data() function
+
+# ======= 2) Capture structures (append alongside your prints) =======
+if "_capture_pick_candidates" not in globals():
+    _capture_pick_candidates = []
+    _capture_value_decay = []
+    _capture_pos_outlook = []
+
+def _lookup_env(name: str):
+    if "players_df" not in globals(): return (np.nan, np.nan, np.nan)
+    row = players_df.loc[players_df["name"]==name, ["low","proj","high"]]
+    if row.empty: return (np.nan, np.nan, np.nan)
+    r = row.iloc[0]
+    return (float(r.get("low", np.nan)), float(r.get("proj", np.nan)), float(r.get("high", np.nan)))
+
+def _add_env_metrics(row: dict):
+    # adds floor/ceiling/safety/volatility using low/proj/high (if present)
+    out = dict(row)
+    low, proj, high = out.get("low"), out.get("proj"), out.get("high")
+    if (low is None or not np.isfinite(low)) or (proj is None or not np.isfinite(proj)) or (high is None or not np.isfinite(high)):
+        # try to fill from lookup
+        low, proj, high = _lookup_env(out["name"])
+        out["low"], out["proj"], out["high"] = low, proj, high
+    if np.isfinite(low) and np.isfinite(proj) and np.isfinite(high) and (proj != 0.0):
+        eps = 1e-6
+        out["floor"] = low
+        out["ceiling"] = high
+        out["safety_idx"] = low / (abs(proj) + eps)
+        out["ceiling_idx"] = high / (abs(proj) + eps)
+        out["volatility_idx"] = (high - low) / (abs(proj) + eps)
+    return out
+
+# ======= 3) Call these next to your existing print blocks =======
+def _record_candidates(pick_num: int, pos: str, rows: list[dict]):
+    """
+    rows items expected: {"name": str, "proj_pts": float, "avail": float}
+    We augment with low/proj/high + derived envelope metrics if available.
+    """
+    for r in rows:
+        rec = {
+            "pick": int(pick_num),
+            "pos": pos,
+            "name": r["name"],
+            "proj_pts": float(r["proj_pts"]),
+            "avail": float(r.get("avail", np.nan)),
+        }
+        low, proj, high = _lookup_env(r["name"])
+        rec.update({"low": low, "proj": proj, "high": high})
+        rec = _add_env_metrics(rec)
+        _capture_pick_candidates.append(rec)
+
+def _record_value_decay(pick_num: int, pos: str, now_pts: float, next_pts: float, now_survival: float | None):
+    drop_abs = float(now_pts - next_pts)
+    drop_pct = float(0.0 if now_pts == 0 else 100.0 * drop_abs / now_pts)
+    _capture_value_decay.append({
+        "pick": int(pick_num), "pos": pos,
+        "now_pts": float(now_pts), "next_pts": float(next_pts),
+        "now_survival": float(now_survival) if now_survival is not None else np.nan,
+        "drop_abs": drop_abs, "drop_pct": drop_pct
+    })
+
+def _record_pos_outlook(pick_num: int, window_label: str, pos: str, rows: list[dict]):
+    """
+    rows items: {"name": str, "rel_baseline": float, "survival": float}
+    We back out an estimated baseline to compute floor/ceiling vs baseline too.
+    """
+    for r in rows:
+        name = r["name"]; rb = float(r["rel_baseline"])
+        low, proj, high = _lookup_env(name)
+        base_est = (proj / rb) if (rb and np.isfinite(rb) and np.isfinite(proj) and rb != 0.0) else np.nan
+        floor_rel = (low / base_est) if (np.isfinite(low) and np.isfinite(base_est) and base_est != 0.0) else np.nan
+        ceil_rel  = (high / base_est) if (np.isfinite(high) and np.isfinite(base_est) and base_est != 0.0) else np.nan
+        _capture_pos_outlook.append({
+            "pick": int(pick_num), "window": window_label, "pos": pos, "name": name,
+            "rel_baseline": rb, "survival": float(r.get("survival", np.nan)),
+            "proj_pts": float(proj) if np.isfinite(proj) else np.nan,
+            "low": float(low) if np.isfinite(low) else np.nan,
+            "high": float(high) if np.isfinite(high) else np.nan,
+            "floor_rel_baseline": float(floor_rel) if np.isfinite(floor_rel) else np.nan,
+            "ceiling_rel_baseline": float(ceil_rel) if np.isfinite(ceil_rel) else np.nan
+        })
+
+# ======= 4) Export everything at the end of the run (or after each pick) =======
+def _export_pick_run(meta_extra: dict | None = None):
+    cand_df = pd.DataFrame(_capture_pick_candidates)
+    decay_df = pd.DataFrame(_capture_value_decay)
+    out_df   = pd.DataFrame(_capture_pos_outlook)
+
+    where = {}
+    if not cand_df.empty:  where["pick_candidates"] = _safe_export(cand_df, "pick_candidates")
+    if not decay_df.empty: where["value_decay"]     = _safe_export(decay_df, "value_decay")
+    if not out_df.empty:   where["pos_outlook"]     = _safe_export(out_df, "pos_outlook")
+
+    meta = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "python": sys.version,
+        "platform": platform.platform(),
+        "inputs": {
+            "envelope_file": ENVELOPE_FILE if ENVELOPE_FILE else None,
+            "envelope_hash": _hash_file(ENVELOPE_FILE) if ENVELOPE_FILE else ""
+        },
+        "exported": where
+    }
+    if meta_extra: meta.update(meta_extra)
+    with open(os.path.join(EXPORT_DIR, "run_metadata.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
 # ==============================================================================
 # MONTE CARLO SIMULATION PARAMETERS - Control draft variability
 # ==============================================================================
@@ -136,7 +300,10 @@ CAPTURE_EXAMPLES = {
 }
 
 
-# Removed accept_fuzzy_match - now using improved matching in load_and_merge_data
+
+# ==============================================================================
+# DATA LOADING AND PROCESSING - Load ESPN projections and fantasy rankings
+# ==============================================================================
 
 
 def load_and_merge_data(espn_file: str = "data/probability-models-draft/espn_projections_20250814.csv") -> List[Player]:
@@ -268,6 +435,30 @@ def load_and_merge_data(espn_file: str = "data/probability-models-draft/espn_pro
             if elite_zeros > 0:
                 print(f" - INCLUDING {elite_zeros} TOP-50 PLAYERS!", end="")
             print()
+
+    # Create players dataframe for envelope integration
+    global players_df
+    players_df = pd.DataFrame([{
+        'name': p.name,
+        'position': p.position, 
+        'points': p.points,
+        'overall_rank': p.overall_rank
+    } for p in players])
+    
+    # Apply envelope integration from paste-in update
+    try:
+        if USE_ENVELOPES and ENVELOPE_FILE and os.path.exists(ENVELOPE_FILE):
+            players_df["name_key"] = players_df["name"].map(_canon)
+            env = _load_envelopes(ENVELOPE_FILE)
+            players_df = players_df.merge(env[["name_key","low","proj","high"]], on="name_key", how="left")
+            print(f"\nLoaded envelope projections from {ENVELOPE_FILE}: {len(env)} rows")
+        else:
+            # ensure columns exist for downstream joins
+            for c in ("low","proj","high"):
+                if c not in players_df.columns:
+                    players_df[c] = np.nan
+    except Exception as _e:
+        print(f"[envelopes] skipped: {_e}")
 
     return sorted(players, key=lambda p: p.overall_rank)
 
@@ -424,6 +615,44 @@ def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims, dat
     print(
         f"\nLoad in Jupyter with: pd.read_csv('{os.path.join(output_dir, f'mc_player_survivals_{data_source}.csv')}')"
     )
+
+
+def _export_pick_run(meta_extra: dict | None = None):
+    """Export captured analytics data with metadata exactly as specified in feedback."""
+    cand_df = pd.DataFrame(_capture_pick_candidates)
+    decay_df = pd.DataFrame(_capture_value_decay)
+    out_df = pd.DataFrame(_capture_pos_outlook)
+
+    where = {}
+    if not cand_df.empty:  where["pick_candidates"] = _safe_export(cand_df, "pick_candidates")
+    if not decay_df.empty: where["value_decay"]     = _safe_export(decay_df, "value_decay")
+    if not out_df.empty:   where["pos_outlook"]     = _safe_export(out_df, "pos_outlook")
+
+    meta = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "python": sys.version,
+        "platform": platform.platform(),
+        "inputs": {
+            "envelope_file": ENVELOPE_FILE,
+            "envelope_hash": _hash_file(ENVELOPE_FILE),
+        },
+        "exported": where
+    }
+    if meta_extra: meta.update(meta_extra)
+    
+    # Export metadata
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    with open(os.path.join(EXPORT_DIR, "run_metadata.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+    
+    # Print summary of exports
+    if where:
+        print(f"\nExported analytics data ({EXPORT_FORMAT.upper()} format):")
+        for key, filepath in where.items():
+            print(f"  - {key}: {filepath}")
+        print(f"  - metadata: {os.path.join(EXPORT_DIR, 'run_metadata.json')}")
+    else:
+        print("\nNo analytics data captured (all capture lists were empty)")
 
 
 def monte_carlo_survival_realistic(
@@ -1074,7 +1303,7 @@ def get_available_players(pos: str, pick_number: int, favorites: set) -> List[Tu
     return available
 
 
-def show_position_players(pos: str, recommended_pos: str, available_players: List[Tuple]):
+def show_position_players(pos: str, recommended_pos: str, available_players: List[Tuple], pick_number: int = None):
     """Display players for a position."""
     if not available_players:
         return
@@ -1092,9 +1321,25 @@ def show_position_players(pos: str, recommended_pos: str, available_players: Lis
         print("─" * 45)
     print()
     
+    # Prepare data for recording if we're in the recommended position
+    candidate_rows = []
+    
     for player, survival_prob, is_favorite in top_players:
         marker = " ⭐" if is_favorite else ""
         print(f"{player.name[:25]:25} {player.points:3.0f} pts    {survival_prob:3.0%}{marker}")
+        
+        # Prepare for recording
+        if pos == recommended_pos and pick_number is not None:
+            candidate_rows.append({
+                "name": player.name,
+                "proj_pts": player.points,
+                "avail": survival_prob
+            })
+    
+    # Record candidates if this is the recommended position and we have analytics enabled
+    if USE_ENVELOPES and pos == recommended_pos and pick_number is not None and candidate_rows:
+        _record_candidates(pick_number, pos, candidate_rows)
+    
     print()
 
 
@@ -1235,6 +1480,33 @@ def show_positional_outlook(pos: str, counts: Dict[str, int], pick_number: int, 
                 print(f"              {', '.join(pick_outputs[3:])}")
     
     print()
+    
+    # Analytics data capture (if enabled) - using new recording function
+    if USE_ENVELOPES:  # Only capture if envelopes enabled (as per original feedback)
+        # Record all candidates shown for all pick windows
+        for pick in all_picks:
+            if pick >= survival_matrix.shape[1]:
+                continue
+            
+            outlook_rows = []
+            # Reconstruct which candidates were shown for this pick
+            for i in range(min(60, len(pos_players))):
+                if i < survival_matrix.shape[0]:
+                    player = pos_players[i]
+                    surv = survival_matrix[i, pick] if pick < survival_matrix.shape[1] else 0.0
+                    
+                    # Only record players that would have been shown (≥50% survival)
+                    if surv >= 0.5 and player.name not in shown_players:
+                        rel_value = (player.points / baseline_player.points) if baseline_player and baseline_player.points > 0 else 1.0
+                        outlook_rows.append({
+                            "name": player.name,
+                            "rel_baseline": rel_value,
+                            "survival": surv
+                        })
+            
+            # Record if we have any candidates for this window
+            if outlook_rows:
+                _record_pos_outlook(pick_number, f"Pick {pick}", pos, outlook_rows[:5])  # Top 5 shown
 
 
 def show_value_decay_analysis(pick_idx: int, counts: Dict[str, int]):
@@ -1340,6 +1612,15 @@ def show_value_decay_analysis(pick_idx: int, counts: Dict[str, int]):
         print(f"{p['pos']} (best now: {p['best_player']}, {p['current_points']:.0f}pts, {player_survival} survival): {drops_str} ({picks_str})")
     
     print()
+    
+    # Analytics data capture (if enabled) - using new recording function
+    if USE_ENVELOPES:  # Only capture if envelopes enabled (as per original feedback)
+        for p in position_decays:
+            if p['pct_drops'] and len(p['pct_drops']) > 0:
+                # Record current vs next pick decay
+                now_pts = p['current_points']
+                next_pts = p['current_points'] * (1 - p['pct_drops'][0]/100) if p['pct_drops'] else now_pts
+                _record_value_decay(current_pick, p['pos'], now_pts, next_pts, None)
 
 
 def show_clean_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int], favorites: set):
@@ -1362,7 +1643,7 @@ def show_clean_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, 
     # Show recommended position first
     if recommended_pos and counts[recommended_pos] < POSITION_LIMITS[recommended_pos]:
         available_players = get_available_players(recommended_pos, pick_number, favorites)
-        show_position_players(recommended_pos, recommended_pos, available_players)
+        show_position_players(recommended_pos, recommended_pos, available_players, pick_number)
     
     # Show value decay analysis
     show_value_decay_analysis(pick_idx, counts)
@@ -1391,6 +1672,8 @@ def show_clean_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, 
     print("- ⭐ marks your favorite players from the cheat sheet")
     print("- 🔴 indicates a value cliff (15%+ drop from previous player)")
     print()
+    
+    # Note: Analytics capture moved to final optimal strategy section to ensure accuracy
 
 
 def clear_capture_examples():
@@ -1483,10 +1766,25 @@ def main():
         action="store_true",
         help="Export enhanced statistical distributions (std, percentiles, CI)",
     )
+    parser.add_argument(
+        "--capture-analytics",
+        action="store_true",
+        help="Enable analytics data capture for detailed pick analysis export",
+    )
+    parser.add_argument(
+        "--export-parquet",
+        action="store_true",
+        help="Export analytics data in Parquet format instead of CSV",
+    )
+    parser.add_argument(
+        "--envelope-file",
+        type=str,
+        help="Path to envelope projections CSV file (enables envelope projection support)",
+    )
     args = parser.parse_args()
 
     # Apply command-line overrides
-    global RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE
+    global RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE, USE_ENVELOPES, EXPORT_FORMAT, ENVELOPE_FILE
 
     # Handle preset modes
     if args.mode:
@@ -1513,9 +1811,27 @@ def main():
     if args.seed is not None:
         np.random.seed(args.seed)
         print(f"Random seed set to: {args.seed}")
+    
+    # Apply new analytics flags (following exact feedback structure)
+    if args.capture_analytics:
+        USE_ENVELOPES = True  # Enable analytics capture via envelopes flag
+        print("Analytics data capture enabled (via USE_ENVELOPES)")
+    
+    if args.export_parquet:
+        EXPORT_FORMAT = "parquet"
+        print("Parquet export format enabled")
+    
+    if args.envelope_file:
+        ENVELOPE_FILE = args.envelope_file
+        USE_ENVELOPES = True
+        print(f"Envelope projections enabled: {ENVELOPE_FILE}")
 
-    # Clear capture examples for fresh run
+    # Clear capture examples and analytics data for fresh run
     clear_capture_examples()
+    global _capture_pick_candidates, _capture_value_decay, _capture_pos_outlook
+    _capture_pick_candidates.clear()
+    _capture_value_decay.clear() 
+    _capture_pos_outlook.clear()
 
     logger.info("Loading player data...")
     
@@ -1650,13 +1966,13 @@ def main():
             # Find most likely available player with availability probability
             best_availability, likely_player, likely_survival = 0, None, 0.0
             for j, player in enumerate(pos_players):
-                survival_prob = player_survival.get((player.name, pick), 0.0)
+                survival_prob = player_survival.get((player.unique_id, pick), 0.0)
                 # Calculate probability all better players (by points) are taken
                 taken_prob = 1.0
                 for h in range(j):  # All players ranked higher by points
                     better_player = pos_players[h]
                     taken_prob *= 1 - player_survival.get(
-                        (better_player.name, pick), 0.0
+                        (better_player.unique_id, pick), 0.0
                     )
 
                 availability = survival_prob * taken_prob
@@ -1669,6 +1985,21 @@ def main():
                 player_info = " (no clear favorite)"
 
             print(f"Pick {pick:2d}: {position}{player_info}")
+            
+            # Analytics capture for FINAL optimal strategy (not intermediate analysis)
+            if USE_ENVELOPES and position and likely_player:
+                # Get top candidates for this optimal position
+                top_candidates = []
+                for j, player in enumerate(pos_players[:5]):  # Top 5 candidates
+                    survival_prob = player_survival.get((player.unique_id, pick), 0.0)
+                    top_candidates.append({
+                        "name": player.name,
+                        "proj_pts": player.points,
+                        "avail": survival_prob
+                    })
+                # Record the optimal position's candidates
+                _record_candidates(pick, position, top_candidates)
+                
         else:
             print(f"Pick {pick:2d}: ")
 
@@ -1682,6 +2013,9 @@ def main():
     print("• Positional outlook %: Fantasy points relative to baseline player")
     print("• Best-Available: Chance this player will be your best option among available players")
     print("─" * 60)
+    
+    # Export analytics data if enabled
+    _export_pick_run()
 
 
 if __name__ == "__main__":

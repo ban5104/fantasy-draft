@@ -36,6 +36,12 @@ python scripts/dp_draft_optimizer_debug.py --mode stable
 # Full analysis with visualizations
 python scripts/dp_draft_optimizer_debug.py --mode debug
 
+# With envelope projections for uncertainty analysis
+python scripts/dp_draft_optimizer_debug.py --mode stable --envelope-file data/my_projections.csv
+
+# Enhanced analytics data capture
+python scripts/dp_draft_optimizer_debug.py --mode stable --capture-analytics
+
 # Reproducible results
 python scripts/dp_draft_optimizer_debug.py --mode stable --seed 42
 ```
@@ -66,14 +72,33 @@ Key variables in main script:
 - `RANDOMNESS_LEVEL` - Draft unpredictability (0.1-0.7, default 0.3)
 - `CANDIDATE_POOL_SIZE` - Players considered per pick (5-25, default 15)
 
+### Envelope Integration Parameters
+- `ENVELOPE_FILE` - Path to envelope projections CSV file (default: None)
+- `USE_ENVELOPES` - Enable envelope functionality and analytics capture (default: True)
+- `EXPORT_DIR` - Directory for analytics exports (default: "data/output-simulations")
+- `EXPORT_FORMAT` - Export format for analytics data (default: "parquet", fallback to CSV)
+
 ## Data Format
 
 - ESPN projections: CSV with player_name, position, overall_rank
   - Available: `espn_projections_20250814.csv`, `espn_algorithm_20250824.csv`
   - Configurable via `--espn-file` parameter
 - Fantasy rankings: `rankings_top300_20250814.csv` with PLAYER, FANTASY_PTS
+- Envelope projections: CSV with flexible column names for projection ranges
+  - Player: `name`, `player`, `player_name`
+  - Position: `pos`, `position` 
+  - Low bound: `low`, `floor`, `p10`
+  - Projection: `proj`, `projection`, `mode`, `median`, `p50`, `center`
+  - High bound: `high`, `ceiling`, `p90`
+  - Enables uncertainty analysis with derived metrics (safety index, volatility index)
 - Additional data: ADP, actual draft results in `probability-models-draft/`
 - All data follows standardized format with 99.6% exact matching
+
+### Analytics Output Files (when envelope/analytics enabled)
+- `pick_candidates.csv` - Top candidates per pick with envelope metrics
+- `value_decay.csv` - Value dropoff analysis between consecutive picks
+- `pos_outlook.csv` - Positional availability trends across rounds
+- `run_metadata.json` - Execution metadata and file hashes for reproducibility
 
 ## Development Workflow
 
