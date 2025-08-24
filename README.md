@@ -21,6 +21,9 @@ The result is a strategy that tells you which **position** to target at each of 
 # Install dependencies
 pip install -r requirements.txt
 
+# Generate draft day cheat sheet with latest data
+python scripts/update_cheat_sheet.py
+
 # Fast optimization (100 simulations, quick results)
 python scripts/dp_draft_optimizer_debug.py --mode fast
 
@@ -48,6 +51,23 @@ pip install -r requirements.txt
 - notebook - Jupyter analysis environment
 
 ## Usage
+
+### Draft Cheat Sheet
+
+Generate a comprehensive cheat sheet that merges data from 4 sources:
+
+```bash
+# Update cheat sheet with all latest data
+python scripts/update_cheat_sheet.py
+
+# Verbose output to see data merge process  
+python scripts/update_cheat_sheet.py -v
+```
+
+Creates `data/draft_day_cheat_sheet.csv` with columns:
+- ESPN_ALG, ESPN_PROJ, ADP_SLEEPER, ACTUAL_DRAFT_YYYYMMDD
+- Automatically finds latest files by timestamp
+- 91.2% data coverage across all sources
 
 ### Mode Presets (Recommended)
 
@@ -151,6 +171,13 @@ The system uses flexible data loading with hierarchical matching:
   - Configurable via `--espn-file` parameter  
   - Available data: `data/probability-models-draft/espn_projections_20250814.csv`, `espn_algorithm_20250824.csv`
 - **Fantasy Rankings**: `data/rankings_top300_20250814.csv` with columns: `PLAYER`, `FANTASY_PTS`
+- **Draft Cheat Sheet Sources**: 4 files in `data/probability-models-draft/` for comprehensive analysis
+  - `espn_algorithm_*.csv` - ESPN algorithm rankings
+  - `espn_projections_*.csv` - ESPN projected rankings
+  - `realtime_adp_*.csv` - Sleeper Average Draft Position data
+  - `actual_draft_results_*.csv` - Actual draft results from real leagues
+  - All use standardized format: `overall_rank,position,position_rank,player_name,team`
+  - Full player names (e.g., "Ja'Marr Chase" not "J. Chase") for accurate matching
 - **Envelope Projections**: Optional CSV with uncertainty ranges (floor/ceiling estimates)
   - Required columns: player name, position, and projection range columns
   - Supported column names:
@@ -159,7 +186,6 @@ The system uses flexible data loading with hierarchical matching:
     - Low: `low`, `floor`, `p10`
     - Projection: `proj`, `projection`, `mode`, `median`, `p50`, `center`
     - High: `high`, `ceiling`, `p90`
-- **Additional Data**: ADP data, actual draft results, and other probability models in `data/probability-models-draft/`
 
 **Data Quality**: 99.6% exact matches with 4-tier hierarchical matching system and 92% fuzzy threshold.
 
@@ -169,11 +195,12 @@ The system uses flexible data loading with hierarchical matching:
 fantasy-draft-fav-players/
 ├── scripts/
 │   ├── dp_draft_optimizer_debug.py    # Main optimizer (self-contained)
+│   ├── update_cheat_sheet.py          # Draft cheat sheet generator
 │   └── tests/                         # Unit and integration tests
 ├── data/
-│   ├── probability-models-draft/      # ESPN projections, ADP, draft results
+│   ├── probability-models-draft/      # 4 data sources: ESPN, ADP, draft results
 │   ├── rankings_top300_20250814.csv   # Fantasy point rankings
-│   └── draft_day_cheat_sheet.txt      # Quick reference
+│   └── draft_day_cheat_sheet.csv      # Generated cheat sheet (merged data)
 ├── jupyter-notebooks/                 # Analysis and visualization (3 notebooks)
 ├── tests/golden/                      # Golden master regression tests
 ├── specs/                             # Mathematical theory and planning
