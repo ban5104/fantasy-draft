@@ -294,6 +294,7 @@ CANDIDATE_POOL_SIZE = 25
 # Global data for DP optimization
 PLAYERS = []
 SURVIVAL_PROBS = {}
+SLOT_EV_TABLES = {}  # MC slot-EV tables for more accurate ladder EV
 
 # Capture variables for calculation examples
 CAPTURE_EXAMPLES = {
@@ -680,6 +681,18 @@ def _export_pick_run(meta_extra: dict | None = None):
         print("\nNo analytics data captured (all capture lists were empty)")
 
 
+def _choose_gumbel_ranked(pool_size: int, temperature: float = 0.35) -> int:
+    """
+    Gumbel/Plackett-Luce pick model with temperature control.
+    Higher utility for higher-ranked candidates (rank 0 best).
+    Temperature controls randomness: lower = more deterministic, higher = more random.
+    """
+    # Higher utility for higher-ranked candidates (rank 0 best)
+    u = -np.arange(pool_size, dtype=float)
+    g = np.random.gumbel(size=pool_size)
+    return int(np.argmax(u / max(1e-9, temperature) + g))
+
+
 def monte_carlo_survival_realistic(
     players: List[Player], num_sims: int, export_simulation_data: bool = False, data_source: str = "espn", enhanced_stats: bool = False
 ) -> Dict[Tuple[str, int], float]:
@@ -697,6 +710,9 @@ def monte_carlo_survival_realistic(
         survival_counts = {(p.unique_id, pick): 0 for p in players for pick in SNAKE_PICKS}
     
     simulation_picks = []
+    
+    # O(1) lookup optimization: create id→idx mapping to avoid O(n) players.index()
+    id_to_idx = {p.unique_id: i for i, p in enumerate(players)}
 
     for sim in range(num_sims):
         available_mask = np.ones(len(players), dtype=bool)
@@ -730,21 +746,13 @@ def monte_carlo_survival_realistic(
                     )
                 valid_indices = available_indices[available_mask][:pool_size]
                 candidates = [players[i] for i in valid_indices]
-                # Original Gaussian noise approach
-                scores = [
-                    (1.0 / (i + 1)) * max(0.1, np.random.normal(1.0, RANDOMNESS_LEVEL))
-                    for i, p in enumerate(candidates)
-                ]
-
-                if scores:
-                    # Normalize weights with epsilon to avoid division by zero
-                    weights = np.array(scores)
-                    weights = weights / (weights.sum() + 1e-12)
-                    choice_idx = np.random.choice(len(candidates), p=weights)
+                
+                # Use Gumbel/Plackett-Luce pick model instead of Gaussian noise
+                if candidates:
+                    choice_idx = _choose_gumbel_ranked(len(candidates), temperature=RANDOMNESS_LEVEL)
                     picked_player = candidates[choice_idx]
-                    player_idx = players.index(
-                        picked_player
-                    )  # Calculate once per picked player
+                    # O(1) lookup instead of O(n) players.index()
+                    player_idx = id_to_idx[picked_player.unique_id]
                     available_mask[player_idx] = False
                     
                     # Capture ONE example for technical summary (sim 0, pick 15)
@@ -753,11 +761,10 @@ def monte_carlo_survival_realistic(
                             'sim': sim,
                             'pick_num': pick_num,
                             'candidates': [(c.name, c.position, c.overall_rank) for c in candidates[:5]],
-                            'scores': scores[:5],
-                            'weights': weights[:5].tolist(),
                             'choice_idx': choice_idx,
                             'picked_player': (picked_player.name, picked_player.position, picked_player.overall_rank),
-                            'randomness_level': RANDOMNESS_LEVEL
+                            'temperature': RANDOMNESS_LEVEL,
+                            'model': 'Gumbel/Plackett-Luce'
                         }
 
                     if export_simulation_data:
@@ -786,11 +793,68 @@ def monte_carlo_survival_realistic(
         )
 
     if enhanced_stats:
-        # Return survival data arrays for statistical processing
-        return survival_data
+        # Return both survival data and simulation picks for slot-EV calculation
+        return survival_data, simulation_picks
     else:
-        # Original behavior: return average survival probabilities
-        return {key: count / num_sims for key, count in survival_counts.items()}
+        # Return survival probabilities and simulation picks  
+        return {key: count / num_sims for key, count in survival_counts.items()}, simulation_picks
+
+
+def build_slot_ev_tables(players: List[Player], simulation_picks: List[Dict]) -> Dict[str, Dict[int, np.ndarray]]:
+    """
+    Build slot-EV tables from MC simulation picks to replace independence assumption.
+    Returns: slot_ev[position][pick_number] = np.array([slot1_ev, slot2_ev, ...])
+    """
+    # Pre-sort by points within each position 
+    by_pos = {pos: sorted([p for p in players if p.position == pos],
+                          key=lambda p: p.points, reverse=True)
+              for pos in ["RB","WR","QB","TE"]}
+    
+    slot_ev = {pos: {} for pos in by_pos}
+    
+    # Group simulation picks by simulation
+    picks_by_sim = {}
+    for pick_data in simulation_picks:
+        sim = pick_data['simulation']
+        if sim not in picks_by_sim:
+            picks_by_sim[sim] = []
+        picks_by_sim[sim].append(pick_data)
+    
+    # For each snake pick, calculate slot values
+    for pick in SNAKE_PICKS:
+        for pos, plist in by_pos.items():
+            slot_values = []  # Will hold list of arrays, one per sim
+            
+            for sim, sim_picks in picks_by_sim.items():
+                # Find which players were picked before this pick in this sim
+                picked_before = set()
+                for pick_data in sim_picks:
+                    if pick_data['pick_number'] < pick:
+                        picked_before.add(pick_data['player_name'])
+                
+                # Find available players at this pick
+                available = [p for p in plist if p.name not in picked_before]
+                
+                # Get slot values (points of 1st, 2nd, 3rd, etc. available players)
+                sim_slot_values = []
+                for slot in range(min(5, len(available))):  # Up to 5 slots
+                    if slot < len(available):
+                        sim_slot_values.append(available[slot].points)
+                    else:
+                        sim_slot_values.append(0.0)
+                slot_values.append(sim_slot_values)
+            
+            # Average across simulations to get expected slot values
+            if slot_values:
+                # Convert to numpy array and take mean across sims
+                slot_array = np.array(slot_values)
+                avg_slot_values = np.mean(slot_array, axis=0)
+                slot_ev[pos][pick] = avg_slot_values
+            else:
+                # No simulation data - fallback to zero
+                slot_ev[pos][pick] = np.zeros(5)
+    
+    return slot_ev
 
 
 def get_position_survival_matrix(
@@ -845,6 +909,24 @@ def get_position_survival_matrix(
                 position_matrices[pos] = M
 
     return position_matrices
+
+
+def ladder_ev_slot_based(
+    position: str,
+    pick_number: int,
+    slot: int,
+    slot_ev_tables: Dict[str, Dict[int, np.ndarray]],
+) -> float:
+    """
+    Compute expected value using MC slot-EV tables (more accurate than independence assumption).
+    """
+    if position not in slot_ev_tables or pick_number not in slot_ev_tables[position]:
+        return 0.0
+    
+    slot_values = slot_ev_tables[position][pick_number]
+    if slot - 1 < len(slot_values):
+        return float(slot_values[slot - 1])  # slot is 1-indexed, array is 0-indexed
+    return 0.0
 
 
 def ladder_ev_debug(
@@ -954,9 +1036,14 @@ def show_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int]):
     for pos in ["RB", "WR", "QB", "TE"]:
         if counts[pos] < POSITION_LIMITS[pos]:
             slot = counts[pos] + 1
-            ev, debug_info = ladder_ev_debug(
-                pos, pick_number, slot, PLAYERS, SURVIVAL_PROBS
-            )
+            # Use slot-EV tables if available, otherwise fall back to original method
+            if SLOT_EV_TABLES and pos in SLOT_EV_TABLES and pick_number in SLOT_EV_TABLES[pos]:
+                ev = ladder_ev_slot_based(pos, pick_number, slot, SLOT_EV_TABLES)
+                debug_info = [f"  Position {pos}, Slot {slot} at Pick {pick_number}: EV={ev:.1f} (slot-based)"]
+            else:
+                ev, debug_info = ladder_ev_debug(
+                    pos, pick_number, slot, PLAYERS, SURVIVAL_PROBS
+                )
             position_evs[pos] = ev
             # Calculate total DP value if we draft this position
             new_counts = counts.copy()
@@ -1006,8 +1093,9 @@ def dp_optimize(
 ) -> Tuple[float, str]:
     """DP recurrence: F(k,r,w,q,t) = max{ladder_ev + F(k+1,...)}"""
 
-    # Early termination if roster is full
-    if rb_count == 3 and wr_count == 2 and qb_count == 1 and te_count == 1:
+    # Early termination if roster is full (using POSITION_LIMITS for flexibility)
+    counts = {"RB": rb_count, "WR": wr_count, "QB": qb_count, "TE": te_count}
+    if all(counts[pos] >= POSITION_LIMITS[pos] for pos in POSITION_LIMITS):
         return 0.0, ""
 
     if pick_idx >= len(SNAKE_PICKS):
@@ -1018,7 +1106,7 @@ def dp_optimize(
         return 0.0, ""
 
     current_pick = SNAKE_PICKS[pick_idx]
-    counts = {"RB": rb_count, "WR": wr_count, "QB": qb_count, "TE": te_count}
+    # counts already defined above for roster full check
 
     # Validate position counts
     if any(
@@ -1036,9 +1124,14 @@ def dp_optimize(
             slot = counts[pos] + 1
 
             try:
-                ev, debug_lines = ladder_ev_debug(
-                    pos, current_pick, slot, PLAYERS, SURVIVAL_PROBS
-                )
+                # Use slot-EV tables if available, otherwise fall back to original method
+                if SLOT_EV_TABLES and pos in SLOT_EV_TABLES and current_pick in SLOT_EV_TABLES[pos]:
+                    ev = ladder_ev_slot_based(pos, current_pick, slot, SLOT_EV_TABLES)
+                    debug_lines = [f"  Position {pos}, Slot {slot} at Pick {current_pick}: EV={ev:.1f} (slot-based)"]
+                else:
+                    ev, debug_lines = ladder_ev_debug(
+                        pos, current_pick, slot, PLAYERS, SURVIVAL_PROBS
+                    )
 
                 new_counts = counts.copy()
                 new_counts[pos] += 1
@@ -1104,7 +1197,8 @@ def run_stability_sweep(players: List[Player]) -> None:
             CANDIDATE_POOL_SIZE = pool_size
 
             # Run shorter simulation for sweep
-            player_survival = monte_carlo_survival_realistic(players, 1000, data_source="sweep")
+            simulation_result = monte_carlo_survival_realistic(players, 1000, data_source="sweep")
+            player_survival, _ = simulation_result  # Don't need simulation_picks for sweep
             SURVIVAL_PROBS = get_position_survival_matrix(players, player_survival)
 
             # Get optimal sequence
@@ -1202,15 +1296,13 @@ def show_technical_summary():
         print(f"   Randomness Level: {mc_example['randomness_level']} (affects selection variance)")
         print(f"   Available Candidate Pool (top 5 shown):")
         for i, (name, pos, rank) in enumerate(mc_example['candidates']):
-            score = mc_example['scores'][i]
-            weight = mc_example['weights'][i]
             selected = "← SELECTED" if i == mc_example['choice_idx'] else ""
-            print(f"     {name[:20]:20} {pos:2} (ESPN #{rank:2}) score:{score:.3f} weight:{weight:.3f} {selected}")
+            print(f"     {name[:20]:20} {pos:2} (ESPN #{rank:2}) {selected}")
         picked_name, picked_pos, picked_rank = mc_example['picked_player']
         print(f"   Result: {picked_name} ({picked_pos}, ESPN #{picked_rank}) was selected")
-        print(f"   Formula: score = (1/espn_rank) × max(0.1, normal(1.0, {mc_example['randomness_level']}))")
-        print(f"            weights = scores / sum(scores)")
-        print(f"   This process repeats {mc_example['sim']+1000} times to calculate survival probabilities.")
+        print(f"   Model: {mc_example.get('model', 'Gumbel/Plackett-Luce')} with temperature={mc_example.get('temperature', mc_example.get('randomness_level', 0.3))}")
+        print(f"   Formula: utility = -rank, pick = argmax(utility/temperature + gumbel_noise)")
+        print(f"   This process repeats {num_sims} times to calculate survival probabilities.")
     else:
         print(f"\n1. MONTE CARLO PICK EXAMPLE: Not captured")
     
@@ -1257,7 +1349,7 @@ def show_technical_summary():
     print(f"   • Prob Better Gone: ∏(1 - survival_prob_of_better_players) - all better players taken")
     print(f"   • Ladder EV: Σ(fantasy_points × survival_prob × prob_better_gone) - expected points")
     print(f"   • DP Recursion: F(pick,roster) = max_position(ladder_ev + F(next_pick,updated_roster))")
-    print(f"   • Monte Carlo Weight: (1/espn_rank) × max(0.1, normal(1.0, randomness)) - selection probability")
+    print(f"   • Monte Carlo Selection: argmax(-rank/temperature + gumbel_noise) - principled noisy rational choice")
     print(f"\n   Algorithm Flow:")
     print(f"   1. Simulate 1000+ drafts → Calculate survival probabilities")
     print(f"   2. For each pick/position → Calculate ladder expected value")
@@ -1630,13 +1722,18 @@ def show_value_decay_analysis(pick_idx: int, counts: Dict[str, int]):
         survival_matrix = SURVIVAL_PROBS.get(p['pos'])
         
         # Find the player's survival probability
-        player_survival = "N/A"
+        player_survival_str = "N/A"
+        player_survival_float = None
         for i, player in enumerate(pos_players):
             if player.name == p['best_player'] and i < survival_matrix.shape[0] and current_pick < survival_matrix.shape[1]:
-                player_survival = f"{survival_matrix[i, current_pick]:.0%}"
+                player_survival_float = survival_matrix[i, current_pick]
+                player_survival_str = f"{player_survival_float:.0%}"
                 break
         
-        print(f"{p['pos']} (best now: {p['best_player']}, {p['current_points']:.0f}pts, {player_survival} survival): {drops_str} ({picks_str})")
+        print(f"{p['pos']} (best now: {p['best_player']}, {p['current_points']:.0f}pts, {player_survival_str} survival): {drops_str} ({picks_str})")
+        
+        # Store survival probability in the decay data for analytics capture
+        p['survival_prob'] = player_survival_float
     
     print()
     
@@ -1644,10 +1741,11 @@ def show_value_decay_analysis(pick_idx: int, counts: Dict[str, int]):
     if USE_ENVELOPES:  # Only capture if envelopes enabled (as per original feedback)
         for p in position_decays:
             if p['pct_drops'] and len(p['pct_drops']) > 0:
-                # Record current vs next pick decay
+                # Record current vs next pick decay with survival probability
                 now_pts = p['current_points']
                 next_pts = p['current_points'] * (1 - p['pct_drops'][0]/100) if p['pct_drops'] else now_pts
-                _record_value_decay(current_pick, p['pos'], now_pts, next_pts, None)
+                now_survival = p.get('survival_prob')  # Use the stored survival probability
+                _record_value_decay(current_pick, p['pos'], now_pts, next_pts, now_survival)
 
 
 def show_clean_pick_analysis(pick_idx: int, pick_number: int, counts: Dict[str, int], favorites: set):
@@ -1872,22 +1970,30 @@ def main():
     print(f"{'='*60}")
 
     logger.info(f"Running {num_sims} Monte Carlo simulations...")
-    player_survival = monte_carlo_survival_realistic(
+    simulation_result = monte_carlo_survival_realistic(
         players, num_sims, export_simulation_data=export_csv, data_source="espn", enhanced_stats=USE_ENVELOPES
     )
 
     # Setup global data for DP optimization
-    global PLAYERS, SURVIVAL_PROBS
+    global PLAYERS, SURVIVAL_PROBS, SLOT_EV_TABLES
     PLAYERS = players
     
-    # Convert enhanced stats back to simple probabilities for DP optimization
+    # Handle new return format: (survival_data, simulation_picks)
     if USE_ENVELOPES:
+        player_survival, simulation_picks = simulation_result
+        # Convert enhanced stats back to simple probabilities for DP optimization
         simple_survival_probs = {}
         for key, data_list in player_survival.items():
             simple_survival_probs[key] = np.mean(data_list) if data_list else 0.0
         SURVIVAL_PROBS = get_position_survival_matrix(players, simple_survival_probs)
     else:
+        player_survival, simulation_picks = simulation_result
         SURVIVAL_PROBS = get_position_survival_matrix(players, player_survival)
+    
+    # Build slot-EV tables for more accurate ladder EV calculations
+    if simulation_picks:
+        SLOT_EV_TABLES = build_slot_ev_tables(players, simulation_picks)
+        print(f"Built slot-EV tables from {len(simulation_picks)} simulation picks")
 
     # Handle optional exports and visualization
     if export_csv:
