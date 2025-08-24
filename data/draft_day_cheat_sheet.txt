@@ -1,0 +1,74 @@
+================================================================================
+                         FANTASY FOOTBALL DRAFT DAY CHEAT SHEET
+                                YOUR TARGET PLAYERS
+================================================================================
+
+PLAYER                    POS  TEAM  ESPN  SLEEPER  RTSPORTS  BYE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+A.J. Brown                WR   PHI    15     19       25     9
+Josh Allen                QB   BUF    28     22       23    12
+Jalen Hurts               QB   PHI    31     40       39     9
+TreVeyon Henderson        RB   NE     44     63       44    11
+Breece Hall               RB   NYJ    45     33       28     5
+Xavier Worthy             WR   KC     46     56       65    10
+Calvin Ridley             WR   TEN    51     77       56     5
+Rashee Rice               WR   KC     55     41       58    10
+Jameson Williams          WR   DET    56     57       66     8
+DeVonta Smith             WR   PHI    57     54       55     9
+Sam LaPorta               TE   DET    61     56       59     8
+Patrick Mahomes           QB   KC     62     57       61    10
+Baker Mayfield            QB   TB     63     72       69     5
+Tetairoa McMillan         WR   CAR    64     59       54    11
+Tony Pollard              RB   TEN    68     67       65     5
+RJ Harvey                 RB   DEN    72     58       52    12
+Matthew Golden            WR   GB     74     97       87    10
+Cooper Kupp               WR   SEA    75     86       89     5
+Kaleb Johnson             RB   PIT    80     79       62     5
+Bo Nix                    QB   DEN    87     80       78     7
+Stefon Diggs              WR   NE     96     87       88    11
+Keon Coleman              WR   BUF    97    128      117    12
+Justin Fields             QB   NYJ   106    124      105     5
+Emeka Egbuka              WR   TB    112    115      103     5
+Drake Maye                QB   NE    121    124      127    11
+Tyler Warren              TE   IND   126    104      104    14
+Zach Charbonnet           RB   SEA   131    108       99     8
+Kaleb Johnson             RB   PIT   145    150      145     8
+Luther Burden III         WR   CHI   157    133      148     5
+Colston Loveland          TE   CHI   177    180      175     7
+Jayden Higgins            WR   HOU   184    190      180     7
+Cameron Ward              QB   TEN   199    172      156     5
+Pat Bryant                WR   DEN   209    231      213     7
+Bryce Young               QB   CAR   218    161      162    11
+Adonai Mitchell           WR   IND   224    273      256    14
+Theo Johnson              TE   NYG   290    262      263    11
+Ollie Gordon              RB   MIA   350    380      370     5
+Jaylin Lane               WR   WAS   999    332      332    12
+Jacory Croskey-Merritt    RB   WAS   999    999      999     9
+
+📋 QUICK REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ESPN = Draft app algorithm likely follows this ranking
+SLEEPER = Sleeper ADP data  
+RTSPORTS = RTSports ADP data
+
+📊 POSITION BREAKDOWN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QB (9): Allen, Hurts, Mahomes, Mayfield, Nix, Fields, Maye, Ward, Young
+RB (9): Henderson, Hall, Pollard, Harvey, Johnson (K), Charbonnet, Johnson (O), Gordon, Croskey-Merritt  
+WR (18): Brown, Worthy, Ridley, Rice, Williams, Smith, McMillan, Golden, 
+         Kupp, Diggs, Coleman, Egbuka, Burden, Higgins, Bryant, Mitchell, Lane
+TE (4): LaPorta, Warren, Loveland, Johnson
+
+📅 BYE WEEK SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Week 5:  Hall, Ridley, Pollard, Johnson (K), Mayfield, Egbuka, Burden, Fields, Ward, Gordon
+Week 7:  Nix, Bryant, Loveland, Higgins
+Week 8:  Williams, LaPorta, Charbonnet
+Week 9:  Brown, Hurts, Smith, Croskey-Merritt
+Week 10: Worthy, Rice, Mahomes, Golden
+Week 11: Henderson, McMillan, Diggs, Young, Johnson (T)
+Week 12: Allen, Coleman, Harvey, Lane
+Week 14: Warren, Mitchell
+
+Last Updated: August 2025 | Raw Data - No Analysis
+================================================================================
