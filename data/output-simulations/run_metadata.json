@@ -1,0 +1,14 @@
+{
+  "timestamp": "2025-08-24 17:55:11",
+  "python": "3.13.6 (main, Aug  6 2025, 13:05:20) [Clang 17.0.0 (clang-1700.0.13.3)]",
+  "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+  "inputs": {
+    "envelope_file": null,
+    "envelope_hash": ""
+  },
+  "exported": {
+    "pick_candidates": "data/output-simulations/pick_candidates.csv",
+    "value_decay": "data/output-simulations/value_decay.csv",
+    "pos_outlook": "data/output-simulations/pos_outlook.csv"
+  }
+}

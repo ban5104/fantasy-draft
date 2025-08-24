@@ -62,6 +62,21 @@ python scripts/dp_draft_optimizer_debug.py --mode stable
 python scripts/dp_draft_optimizer_debug.py --mode debug
 ```
 
+### Envelope Projections
+
+Use envelope projections to incorporate uncertainty ranges (floor/ceiling estimates) into your analysis:
+
+```bash
+# Enable envelope projections with CSV file
+python scripts/dp_draft_optimizer_debug.py --mode stable --envelope-file data/my_envelope_projections.csv
+
+# Enable comprehensive analytics data capture
+python scripts/dp_draft_optimizer_debug.py --mode stable --capture-analytics
+
+# Export analytics in Parquet format (more efficient for large datasets)
+python scripts/dp_draft_optimizer_debug.py --mode stable --capture-analytics --export-parquet
+```
+
 ### Advanced Usage
 
 ```bash
@@ -77,8 +92,8 @@ python scripts/dp_draft_optimizer_debug.py --sims 10000 --randomness 0.4 --pool-
 # Custom ESPN data source
 python scripts/dp_draft_optimizer_debug.py --mode stable --espn-file data/espn_algorithm_20250824.csv
 
-# Full feature set
-python scripts/dp_draft_optimizer_debug.py --export-csv --export-simulations --visualize --save-plots
+# Full feature set with envelope projections
+python scripts/dp_draft_optimizer_debug.py --export-csv --export-simulations --visualize --save-plots --envelope-file data/projections.csv
 ```
 
 ### Data Analysis
@@ -136,6 +151,14 @@ The system uses flexible data loading with hierarchical matching:
   - Configurable via `--espn-file` parameter  
   - Available data: `data/probability-models-draft/espn_projections_20250814.csv`, `espn_algorithm_20250824.csv`
 - **Fantasy Rankings**: `data/rankings_top300_20250814.csv` with columns: `PLAYER`, `FANTASY_PTS`
+- **Envelope Projections**: Optional CSV with uncertainty ranges (floor/ceiling estimates)
+  - Required columns: player name, position, and projection range columns
+  - Supported column names:
+    - Name: `name`, `player`, `player_name`
+    - Position: `pos`, `position`
+    - Low: `low`, `floor`, `p10`
+    - Projection: `proj`, `projection`, `mode`, `median`, `p50`, `center`
+    - High: `high`, `ceiling`, `p90`
 - **Additional Data**: ADP data, actual draft results, and other probability models in `data/probability-models-draft/`
 
 **Data Quality**: 99.6% exact matches with 4-tier hierarchical matching system and 92% fuzzy threshold.
@@ -173,6 +196,20 @@ The optimizer produces:
 3. **Player Availability:** Survival probabilities with clear availability displays (e.g., "P=0.82 best-available")
 4. **Export Data:** CSV files with reproducibility metadata (seed included)
 5. **Visualizations:** Charts and plots with stability sweep analysis
+6. **Analytics Data Exports:** Comprehensive data exports for further analysis when `--capture-analytics` is enabled
+
+### Analytics Exports
+
+When analytics capture is enabled (via `--capture-analytics` or envelope projections), the system exports detailed analysis data:
+
+- **`pick_candidates.csv`**: Top candidates considered at each pick with envelope metrics
+  - Includes: player name, projected points, availability probability, floor/ceiling values, safety/volatility indices
+- **`value_decay.csv`**: Value dropoff analysis between picks by position
+  - Shows absolute and percentage point drops between consecutive picks
+- **`pos_outlook.csv`**: Positional outlook and availability trends
+  - Position-level analysis across draft rounds
+- **`run_metadata.json`**: Execution metadata for reproducibility
+  - Timestamp, system info, input file hashes, exported file paths
 
 **Sample Output:**
 ```

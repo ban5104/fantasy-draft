@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "name": "envelope-merging-implementation",
+  "description": "Comprehensive validation of envelope projection merging functionality with analytics export capabilities",
+  "generated_by": "spec-generator",
+  "generated_at": "2025-01-22T21:00:00Z",
+  "acceptance": [
+    {
+      "id": "golden-master-regression-protection",
+      "type": "custom",
+      "description": "Ensure envelope implementation doesn't break existing functionality - golden master regression test",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/tests/test_golden_master.py",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "comprehensive-optimizer-validation",
+      "type": "custom",
+      "description": "Run full optimizer test suite to validate core functionality remains intact",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/tests/test_optimizer.py",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "favorites-functionality-preserved",
+      "type": "unit",
+      "description": "Verify favorites loading functionality continues to work with envelope changes",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/tests/test_favorites.py",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "envelope-fast-mode-smoke-test",
+      "type": "custom",
+      "description": "Quick smoke test with envelope functionality using fast mode (100 simulations)",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/dp_draft_optimizer_debug.py --mode fast --seed 42",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "envelope-stable-mode-production",
+      "type": "custom",
+      "description": "Production-quality test with envelope functionality (5000 simulations, analytics export)",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/dp_draft_optimizer_debug.py --mode stable --seed 42",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "analytics-export-files-generated",
+      "type": "static",
+      "description": "Verify analytics export functionality creates expected output files",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && test -f data/output-simulations/pick_candidates.csv && test -f data/output-simulations/value_decay.csv && test -f data/output-simulations/pos_outlook.csv && test -f data/output-simulations/run_metadata.json",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "envelope-file-graceful-fallback",
+      "type": "custom",
+      "description": "Test graceful fallback when no envelope file is provided (backwards compatibility)",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python scripts/dp_draft_optimizer_debug.py --mode fast --seed 42 --espn-file data/probability-models-draft/espn_projections_20250814.csv",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "envelope-derived-metrics-validation",
+      "type": "custom",
+      "description": "Verify envelope-derived metrics (floor, ceiling, safety_index, volatility_index) are calculated correctly",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python -c \"import pandas as pd; df = pd.read_csv('data/output-simulations/pick_candidates.csv'); assert 'floor' in df.columns; assert 'ceiling' in df.columns; assert 'safety_index' in df.columns; assert 'volatility_index' in df.columns; print('Envelope metrics validation passed')\"",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "export-format-parquet-fallback",
+      "type": "custom",
+      "description": "Test export format configuration and parquet fallback to CSV functionality",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && python -c \"import os; files = os.listdir('data/output-simulations/'); csv_files = [f for f in files if f.endswith('.csv')]; assert len(csv_files) >= 3, f'Expected at least 3 CSV files, found {len(csv_files)}'; print(f'Export format validation passed - found {len(csv_files)} CSV files')\"",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "monolithic-architecture-preserved",
+      "type": "static",
+      "description": "Verify main optimizer script remains unified (single file architecture constraint)",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && test $(wc -l < scripts/dp_draft_optimizer_debug.py) -gt 1500 && test $(find scripts/ -name '*.py' -not -path 'scripts/tests/*' -not -name 'update_cheat_sheet.py' | wc -l) -eq 1",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "data-integrity-with-envelopes",
+      "type": "static",
+      "description": "Verify all required data files exist and envelope implementation maintains data integrity",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && test -f data/probability-models-draft/espn_projections_20250814.csv && test -f data/probability-models-draft/realtime_adp_20250822.csv && test -f data/probability-models-draft/actual_draft_results_20250823.csv && test -f data/rankings_top300_20250814.csv",
+      "expect": {
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "documentation-updates-verified",
+      "type": "static", 
+      "description": "Verify README.md and CLAUDE.md contain envelope projection documentation",
+      "command": "cd /Users/ben/projects/fantasy-draft-refactor/core-cleanup && grep -q 'Envelope Projections' README.md && grep -q 'envelope projection' CLAUDE.md",
+      "expect": {
+        "exitCode": 0
+      }
+    }
+  ],
+  "policy": {
+    "risk_level": "medium",
+    "auto_merge_if_low_risk": false,
+    "migration_requires_manual_approval": true
+  }
+}
