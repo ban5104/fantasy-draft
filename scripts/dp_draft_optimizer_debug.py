@@ -133,18 +133,19 @@ def _canon(s: str) -> str:
         s = s.replace(tok, " ")
     return " ".join(s.split())
 
-def _safe_export(df: pd.DataFrame, name: str) -> str:
+def _safe_export(df: pd.DataFrame, name: str) -> tuple[str, str]:
+    """Export dataframe to file. Returns (filepath, format_used)."""
     os.makedirs(EXPORT_DIR, exist_ok=True)
     base = os.path.join(EXPORT_DIR, name)
     if EXPORT_FORMAT == "parquet":
         try:
             import pyarrow  # noqa: F401
             df.to_parquet(base + ".parquet", index=False)
-            return base + ".parquet"
+            return base + ".parquet", "parquet"
         except Exception:
             pass
     df.to_csv(base + ".csv", index=False)
-    return base + ".csv"
+    return base + ".csv", "csv"
 
 def _hash_file(path: str) -> str:
     if not path or not os.path.exists(path): return ""
@@ -183,7 +184,15 @@ if "_capture_pick_candidates" not in globals():
 
 def _lookup_env(name: str):
     if "players_df" not in globals(): return (np.nan, np.nan, np.nan)
+    
+    # First try exact match
     row = players_df.loc[players_df["name"]==name, ["low","proj","high"]]
+    
+    # If no exact match, try stripping team abbreviations
+    if row.empty:
+        clean_name = strip_team_abbrev(name)
+        row = players_df.loc[players_df["name"].apply(strip_team_abbrev)==clean_name, ["low","proj","high"]]
+    
     if row.empty: return (np.nan, np.nan, np.nan)
     r = row.iloc[0]
     return (float(r.get("low", np.nan)), float(r.get("proj", np.nan)), float(r.get("high", np.nan)))
@@ -219,6 +228,7 @@ def _record_candidates(pick_num: int, pos: str, rows: list[dict]):
             "proj_pts": float(r["proj_pts"]),
             "avail": float(r.get("avail", np.nan)),
         }
+        # Always try to look up envelope data (will return NaN if not found)
         low, proj, high = _lookup_env(r["name"])
         rec.update({"low": low, "proj": proj, "high": high})
         rec = _add_env_metrics(rec)
@@ -256,29 +266,7 @@ def _record_pos_outlook(pick_num: int, window_label: str, pos: str, rows: list[d
         })
 
 # ======= 4) Export everything at the end of the run (or after each pick) =======
-def _export_pick_run(meta_extra: dict | None = None):
-    cand_df = pd.DataFrame(_capture_pick_candidates)
-    decay_df = pd.DataFrame(_capture_value_decay)
-    out_df   = pd.DataFrame(_capture_pos_outlook)
-
-    where = {}
-    if not cand_df.empty:  where["pick_candidates"] = _safe_export(cand_df, "pick_candidates")
-    if not decay_df.empty: where["value_decay"]     = _safe_export(decay_df, "value_decay")
-    if not out_df.empty:   where["pos_outlook"]     = _safe_export(out_df, "pos_outlook")
-
-    meta = {
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "python": sys.version,
-        "platform": platform.platform(),
-        "inputs": {
-            "envelope_file": ENVELOPE_FILE if ENVELOPE_FILE else None,
-            "envelope_hash": _hash_file(ENVELOPE_FILE) if ENVELOPE_FILE else ""
-        },
-        "exported": where
-    }
-    if meta_extra: meta.update(meta_extra)
-    with open(os.path.join(EXPORT_DIR, "run_metadata.json"), "w") as f:
-        json.dump(meta, f, indent=2)
+# Note: _export_pick_run function moved to line 646 to avoid duplication
 
 # ==============================================================================
 # MONTE CARLO SIMULATION PARAMETERS - Control draft variability
@@ -546,12 +534,14 @@ def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims, dat
                     })
         else:
             # Original behavior: just mean survival probabilities
-            row.update(
-                {
-                    f"survival_pick_{pick}": survival_probs.get((player.unique_id, pick), 0.0)
-                    for pick in snake_picks
-                }
-            )
+            # But handle case where enhanced_stats returned lists
+            for pick in snake_picks:
+                val = survival_probs.get((player.unique_id, pick), 0.0)
+                # If enhanced_stats returned a list, take the mean
+                if isinstance(val, list):
+                    row[f"survival_pick_{pick}"] = np.mean(val) if val else 0.0
+                else:
+                    row[f"survival_pick_{pick}"] = val
         return row
 
     # 1. Player survival data
@@ -586,7 +576,15 @@ def export_mc_results_to_csv(players, survival_probs, snake_picks, num_sims, dat
                     )
             else:
                 # Original behavior: use survival probabilities directly
-                survivals = [survival_probs.get((p.unique_id, pick), 0.0) for p in pos_players]
+                # But handle case where enhanced_stats returned lists
+                survivals = []
+                for p in pos_players:
+                    val = survival_probs.get((p.unique_id, pick), 0.0)
+                    # If enhanced_stats returned a list, take the mean
+                    if isinstance(val, list):
+                        survivals.append(np.mean(val) if val else 0.0)
+                    else:
+                        survivals.append(val)
                 if survivals:
                     position_data.append(
                         {
@@ -639,9 +637,19 @@ def _export_pick_run(meta_extra: dict | None = None):
     out_df = pd.DataFrame(_capture_pos_outlook)
 
     where = {}
-    if not cand_df.empty:  where["pick_candidates"] = _safe_export(cand_df, "pick_candidates")
-    if not decay_df.empty: where["value_decay"]     = _safe_export(decay_df, "value_decay")
-    if not out_df.empty:   where["pos_outlook"]     = _safe_export(out_df, "pos_outlook")
+    actual_format = None
+    if not cand_df.empty:
+        filepath, fmt = _safe_export(cand_df, "pick_candidates")
+        where["pick_candidates"] = filepath
+        actual_format = fmt
+    if not decay_df.empty:
+        filepath, fmt = _safe_export(decay_df, "value_decay")
+        where["value_decay"] = filepath
+        actual_format = fmt
+    if not out_df.empty:
+        filepath, fmt = _safe_export(out_df, "pos_outlook")
+        where["pos_outlook"] = filepath
+        actual_format = fmt
 
     meta = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -662,7 +670,9 @@ def _export_pick_run(meta_extra: dict | None = None):
     
     # Print summary of exports
     if where:
-        print(f"\nExported analytics data ({EXPORT_FORMAT.upper()} format):")
+        # Use actual format that was used, not the configured format
+        format_msg = actual_format.upper() if actual_format else "CSV"
+        print(f"\nExported analytics data ({format_msg} format):")
         for key, filepath in where.items():
             print(f"  - {key}: {filepath}")
         print(f"  - metadata: {os.path.join(EXPORT_DIR, 'run_metadata.json')}")
@@ -799,7 +809,9 @@ def get_position_survival_matrix(
 
         for i, player in enumerate(pos_players):
             for pick in SNAKE_PICKS:
-                matrix[i, pick] = survival_probs.get((player.unique_id, pick), 0.0)
+                survival_data = survival_probs.get((player.unique_id, pick), 0.0)
+                # Handle enhanced_stats case where values are lists
+                matrix[i, pick] = np.mean(survival_data) if isinstance(survival_data, list) else survival_data
 
         position_matrices[pos] = matrix
 
@@ -1793,11 +1805,17 @@ def main():
         USE_ENVELOPES = True  # Standard includes all analytics
         print("Mode: STANDARD (5000 simulations, full analytics and exports)")
     
-    # Apply envelope file if provided
+    # Apply envelope file if provided or use default for standard/debug modes
     if args.envelope_file:
         ENVELOPE_FILE = args.envelope_file
         USE_ENVELOPES = True
         print(f"Using envelope projections: {ENVELOPE_FILE}")
+    elif (args.standard or args.debug) and not ENVELOPE_FILE:
+        # Auto-load sample_envelope.csv if it exists for standard/debug modes
+        default_envelope = os.path.join(os.path.dirname(__file__), "..", "data", "sample_envelope.csv")
+        if os.path.exists(default_envelope):
+            ENVELOPE_FILE = default_envelope
+            print(f"Auto-loading envelope projections: {ENVELOPE_FILE}")
     
     # Set random seed if provided
     if args.seed is not None:
@@ -1945,14 +1963,17 @@ def main():
             # Find most likely available player with availability probability
             best_availability, likely_player, likely_survival = 0, None, 0.0
             for j, player in enumerate(pos_players):
-                survival_prob = player_survival.get((player.unique_id, pick), 0.0)
+                # Handle enhanced_stats case where values are lists
+                survival_data = player_survival.get((player.unique_id, pick), 0.0)
+                survival_prob = np.mean(survival_data) if isinstance(survival_data, list) else survival_data
+                
                 # Calculate probability all better players (by points) are taken
                 taken_prob = 1.0
                 for h in range(j):  # All players ranked higher by points
                     better_player = pos_players[h]
-                    taken_prob *= 1 - player_survival.get(
-                        (better_player.unique_id, pick), 0.0
-                    )
+                    better_survival = player_survival.get((better_player.unique_id, pick), 0.0)
+                    better_survival_prob = np.mean(better_survival) if isinstance(better_survival, list) else better_survival
+                    taken_prob *= 1 - better_survival_prob
 
                 availability = survival_prob * taken_prob
                 if availability > best_availability:
@@ -1970,7 +1991,8 @@ def main():
                 # Get top candidates for this optimal position
                 top_candidates = []
                 for j, player in enumerate(pos_players[:5]):  # Top 5 candidates
-                    survival_prob = player_survival.get((player.unique_id, pick), 0.0)
+                    survival_data = player_survival.get((player.unique_id, pick), 0.0)
+                    survival_prob = np.mean(survival_data) if isinstance(survival_data, list) else survival_data
                     top_candidates.append({
                         "name": player.name,
                         "proj_pts": player.points,

@@ -46,6 +46,15 @@ python scripts/dp_draft_optimizer_debug.py --standard --envelope-file data/my_pr
 python scripts/dp_draft_optimizer_debug.py --standard --position 5 --seed 42
 ```
 
+### Draft Cheat Sheet
+```bash
+# Update cheat sheet with latest data from all sources
+python scripts/update_cheat_sheet.py
+
+# Verbose output to see data merge process
+python scripts/update_cheat_sheet.py -v
+```
+
 ### Dependencies
 ```bash
 pip install -r requirements.txt
@@ -54,7 +63,9 @@ pip install -r requirements.txt
 ## Key Files
 
 - `scripts/dp_draft_optimizer_debug.py` - Main optimization engine (self-contained)
-- `data/probability-models-draft/` - ESPN projections, ADP data, draft results
+- `scripts/update_cheat_sheet.py` - Draft cheat sheet generator 
+- `data/probability-models-draft/` - ESPN projections, ADP data, draft results (4 data sources)
+- `data/draft_day_cheat_sheet.csv` - Generated cheat sheet with merged data from all sources
 - `data/rankings_top300_20250814.csv` - Fantasy point rankings
 - `specs/plan.md` - Mathematical approach and theory
 - `specs/therory.md` - Detailed mathematical formulation
@@ -85,6 +96,13 @@ Key variables in main script:
   - Available: `espn_projections_20250814.csv`, `espn_algorithm_20250824.csv`
   - Configurable via `--espn-file` parameter (optional)
 - Fantasy rankings: `rankings_top300_20250814.csv` with PLAYER, FANTASY_PTS
+- Draft cheat sheet sources (4 files in `data/probability-models-draft/`):
+  - `espn_algorithm_*.csv` → ESPN_ALG column
+  - `espn_projections_*.csv` → ESPN_PROJ column  
+  - `realtime_adp_*.csv` → ADP_SLEEPER column (Sleeper ADP)
+  - `actual_draft_results_*.csv` → ACTUAL_DRAFT_YYYYMMDD column
+  - All use standardized format: `overall_rank,position,position_rank,player_name,team`
+  - Script automatically finds latest files by timestamp (91.2% data coverage)
 - Envelope projections: CSV with flexible column names for projection ranges
   - Player: `name`, `player`, `player_name`
   - Position: `pos`, `position` 
@@ -92,7 +110,6 @@ Key variables in main script:
   - Projection: `proj`, `projection`, `mode`, `median`, `p50`, `center`
   - High bound: `high`, `ceiling`, `p90`
   - Enables uncertainty analysis with derived metrics (safety index, volatility index)
-- Additional data: ADP, actual draft results in `probability-models-draft/`
 - All data follows standardized format with 99.6% exact matching
 
 ### Analytics Output Files (standard/debug modes)
