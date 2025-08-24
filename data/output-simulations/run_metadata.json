@@ -1,10 +1,10 @@
 {
-  "timestamp": "2025-08-24 17:45:57",
+  "timestamp": "2025-08-24 17:55:11",
   "python": "3.13.6 (main, Aug  6 2025, 13:05:20) [Clang 17.0.0 (clang-1700.0.13.3)]",
   "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
   "inputs": {
-    "envelope_file": "data/test_envelope.csv",
-    "envelope_hash": "6f70c12006fd253836e33b93a17e5745f499d53c22eefe59c0d5f1667a419ce1"
+    "envelope_file": null,
+    "envelope_hash": ""
   },
   "exported": {
     "pick_candidates": "data/output-simulations/pick_candidates.csv",
