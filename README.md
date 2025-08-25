@@ -2,7 +2,7 @@
 
 A data-driven draft optimization tool that uses dynamic programming and Monte Carlo simulation to determine optimal fantasy football draft strategies. Instead of evaluating individual players, this system uses a novel "Dynamic Programming over Positions" approach to maximize expected fantasy points across all draft picks.
 
-**Recent Major Enhancements**: Architectural refactoring with simplified data loading, golden master testing framework, elimination of circular imports, and significant correctness fixes with 5-10x performance improvements.
+**Recent Major Enhancements**: Comprehensive decision support system with ε-optimal draft strategies, regret analysis, flexibility scoring, contingency planning, and risk-adjusted variants. Enhanced analytics capture system with detailed pick analysis exports. Configurable draft position and league size with automatic snake pick calculation.
 
 ## Why This Approach
 
@@ -12,8 +12,9 @@ Traditional draft tools focus on player rankings and ADP (Average Draft Position
 - **Optimizing position selection** rather than specific players at each pick
 - **Using dynamic programming** to find globally optimal strategies, not greedy pick-by-pick decisions
 - **Accounting for roster construction** with position limits and snake draft dynamics
+- **Providing comprehensive decision support** with multiple strategies, regret analysis, and contingency planning
 
-The result is a strategy that tells you which **position** to target at each of your picks, maximizing your team's expected point total.
+The result is a draft-day command center that provides optimal position targeting, alternative strategies, and real-time decision support to maximize your team's expected point total.
 
 ## Quick Start
 
@@ -75,12 +76,18 @@ Creates `data/draft_day_cheat_sheet.csv` with columns:
 # Fast mode - quick results for testing (100 simulations)
 python scripts/dp_draft_optimizer_debug.py --mode fast
 
-# Stable mode - production quality with exports (5000 simulations)
+# Stable mode - production quality with decision support features (5000 simulations)
 python scripts/dp_draft_optimizer_debug.py --mode stable
 
-# Debug mode - full analysis with visualizations (1000 simulations)
+# Debug mode - full analysis with visualizations and enhanced features (1000 simulations)
 python scripts/dp_draft_optimizer_debug.py --mode debug
 ```
+
+All modes now include the comprehensive decision support features:
+- **ε-Optimal Plans Menu**: Multiple draft strategies within 3.3% of optimal (configurable)
+- **Pick Analysis**: Regret tables, flexibility scoring, contingency planning
+- **Time-to-Cliff Warnings**: Value drop alerts for positional scarcity
+- **K-Best Path Exploration**: Comprehensive alternative strategy discovery
 
 ### Envelope Projections
 
@@ -109,11 +116,42 @@ python scripts/dp_draft_optimizer_debug.py --stability-sweep
 # Custom parameters (overrides mode presets)
 python scripts/dp_draft_optimizer_debug.py --sims 10000 --randomness 0.4 --pool-size 20
 
-# Custom ESPN data source
-python scripts/dp_draft_optimizer_debug.py --mode stable --espn-file data/espn_algorithm_20250824.csv
+# Custom ESPN data source for model comparison
+python scripts/dp_draft_optimizer_debug.py --mode stable --espn-file data/espn_algorithm_20250824.csv --data-source algorithm
 
 # Full feature set with envelope projections
 python scripts/dp_draft_optimizer_debug.py --export-csv --export-simulations --visualize --save-plots --envelope-file data/projections.csv
+```
+
+### Complete Command Reference
+
+```bash
+# Core options
+--mode {fast,stable,debug}          # Preset configurations (recommended)
+--sims N                           # Number of Monte Carlo simulations
+--seed N                           # Random seed for reproducibility
+
+# Visualization and export
+--visualize                        # Generate Monte Carlo dashboard
+--save-plots                       # Save visualization plots as PNG
+--export-csv                       # Export Monte Carlo results to CSV
+--export-simulations               # Export individual simulation data
+--enhanced-stats                   # Export statistical distributions
+
+# Analytics and envelope projections
+--capture-analytics                # Enable detailed analytics capture
+--export-parquet                   # Export analytics in Parquet format
+--envelope-file PATH               # Enable envelope projections
+
+# Data and parameters
+--espn-file PATH                   # Custom ESPN projections file
+--data-source NAME                 # Data source identifier for outputs
+--randomness FLOAT                 # Draft unpredictability (0.0-1.0)
+--pool-size INT                    # Candidate pool size per pick
+
+# Testing and analysis
+--stability-sweep                  # Parameter robustness testing
+--debug                           # Enable debug mode (default: true)
 ```
 
 ### Data Analysis
@@ -152,15 +190,20 @@ Calculates the expected points from drafting the "next best available" player at
 Edit key parameters in `scripts/dp_draft_optimizer_debug.py`:
 
 ```python
-# Your draft pick positions (snake draft)
-SNAKE_PICKS = [5, 24, 33, 52, 61, 80, 89]  # 14-team league example
+# Draft configuration (automatically calculates SNAKE_PICKS)
+DRAFT_POSITION = 5          # Your position in the draft (1-14)
+LEAGUE_SIZE = 14            # Number of teams in league
 
 # Roster construction targets
 POSITION_LIMITS = {'RB': 3, 'WR': 2, 'QB': 1, 'TE': 1}
 
 # Simulation parameters
 RANDOMNESS_LEVEL = 0.3      # Draft unpredictability (0.1-0.7)
-CANDIDATE_POOL_SIZE = 15    # Players each team considers per pick
+CANDIDATE_POOL_SIZE = 25    # Players each team considers per pick
+
+# Enhanced decision support parameters
+EPSILON_THRESHOLD = 0.033   # Show strategies within 3.3% of optimal
+K_BEST_DEPTH = 10          # Alternative paths to explore per pick
 ```
 
 ## Data Requirements
@@ -192,19 +235,19 @@ The system uses flexible data loading with hierarchical matching:
 ## File Structure
 
 ```
-fantasy-draft-fav-players/
+dpscript-insights/
 ├── scripts/
 │   ├── dp_draft_optimizer_debug.py    # Main optimizer (self-contained)
 │   ├── update_cheat_sheet.py          # Draft cheat sheet generator
 │   └── tests/                         # Unit and integration tests
 ├── data/
-│   ├── probability-models-draft/      # 4 data sources: ESPN, ADP, draft results
+│   ├── probability-models-draft/      # ESPN projections, ADP, draft results
+│   ├── output-simulations/            # Analytics exports and Monte Carlo results
 │   ├── rankings_top300_20250814.csv   # Fantasy point rankings
 │   └── draft_day_cheat_sheet.csv      # Generated cheat sheet (merged data)
 ├── jupyter-notebooks/                 # Analysis and visualization (3 notebooks)
 ├── tests/golden/                      # Golden master regression tests
 ├── specs/                             # Mathematical theory and planning
-├── archived/                          # Previous implementations
 └── requirements.txt                   # Python dependencies
 ```
 
@@ -214,9 +257,47 @@ For implementation details, mathematical background, and development workflows, 
 
 For theoretical foundation and high-level strategy planning, see the `specs/` directory.
 
-## Output
+## Enhanced Decision Support Features
 
-The optimizer produces:
+The optimizer now provides comprehensive draft-day analysis:
+
+### Multiple Draft Strategies
+- **ε-Optimal Plans Menu**: Shows multiple strategies within 3.3% of optimal EV (configurable, e.g., "Plan A: RB-QB-RB-WR... EV 1380.9")
+- **Risk-Adjusted Variants**: Floor-focused (conservative) vs upside-focused (aggressive) approaches when envelope data available
+- **K-Best Exploration**: Configurable depth for discovering alternative draft paths
+
+### Per-Pick Analysis
+- **Regret Analysis**: Compares alternative position choices with specific regret percentages
+- **Flexibility Index**: Entropy-based scoring (0.0-1.0) quantifying decision flexibility
+- **Time-to-Cliff Warnings**: Alerts when positions face significant value drops in coming picks
+- **Contingency Playbooks**: Primary/secondary/tertiary recommendations with specific player targets
+
+### Sample Enhanced Output
+```
+=== DRAFT PLAN MENU (ε=3.3%) ===
+Plan A: RB-QB-RB-WR-RB-WR-TE    EV 1380.9  (baseline)
+Plan B: RB-WR-RB-WR-RB-QB-TE    EV 1374.1  (-0.5%, safer)
+Plan C: WR-RB-QB-WR-RB-WR-TE    EV 1370.2  (-0.8%, WR heavy)
+
+PICK 5 ANALYSIS
+Flexibility Index: 0.71 (many viable options)
+Windows: RB cliff in 1 pick, WR safe for 2 picks
+
+REGRET TABLE:
+Position    EV     Regret    Notes
+RB        380.9    0.0%     (optimal)
+WR        375.2   -1.5%     Strong alternative
+QB        365.1   -4.2%     Early but viable
+
+CONTINGENCY PLAYBOOK:
+🎯 PRIMARY: RB → Saquon Barkley, Jonathan Taylor
+📋 IF GONE: WR → CeeDee Lamb, Tyreek Hill (-1.5% EV)
+🔄 LAST RESORT: QB → Josh Allen, Lamar Jackson (-4.2% EV)
+```
+
+## Standard Output
+
+The optimizer also produces:
 
 1. **Optimal Strategy:** Which position to draft at each of your picks
 2. **Enhanced Debug Analysis:** Both immediate decision value (Delta) and total DP value with counterfactual analysis
