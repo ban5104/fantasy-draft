@@ -3,8 +3,8 @@
   "python": "3.13.6 (main, Aug  6 2025, 13:05:20) [Clang 17.0.0 (clang-1700.0.13.3)]",
   "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
   "inputs": {
-    "envelope_file": null,
-    "envelope_hash": ""
+    "envelope_file": "/Users/ben/projects/fantasy-draft-refactor/core-cleanup/scripts/../data/sample_envelope.csv",
+    "envelope_hash": "7b2201ccafab5f92391b20148bfb73e5f690459cb7fcec373f142a52ed377d34"
   },
   "exported": {
     "pick_candidates": "data/output-simulations/pick_candidates.csv",
