@@ -67,16 +67,21 @@ pip install -r requirements.txt
 ## Configuration Parameters
 
 Key variables in main script:
-- `SNAKE_PICKS` - Draft pick positions (currently 14-team: [5, 24, 33, 52, 61, 80, 89])
+- `DRAFT_POSITION` - Your position in draft (1-14, default 5)
+- `LEAGUE_SIZE` - Number of teams (default 14)
 - `POSITION_LIMITS` - Roster targets ({'RB': 3, 'WR': 2, 'QB': 1, 'TE': 1})
 - `RANDOMNESS_LEVEL` - Draft unpredictability (0.1-0.7, default 0.3)
-- `CANDIDATE_POOL_SIZE` - Players considered per pick (5-25, default 15)
+- `CANDIDATE_POOL_SIZE` - Players considered per pick (default 25)
 
-### Envelope Integration Parameters
-- `ENVELOPE_FILE` - Path to envelope projections CSV file (default: None)
-- `USE_ENVELOPES` - Enable envelope functionality and analytics capture (default: True)
+### Enhanced Decision Support Parameters
+- `EPSILON_THRESHOLD` - Show strategies within this % of optimal (default 0.033 = 3.3%)
+- `K_BEST_DEPTH` - Alternative paths to explore per pick (default 10)
+
+### Analytics and Export Parameters
+- `USE_ANALYTICS` - Enable detailed analytics capture (default: True)
 - `EXPORT_DIR` - Directory for analytics exports (default: "data/output-simulations")
 - `EXPORT_FORMAT` - Export format for analytics data (default: "parquet", fallback to CSV)
+- `ENVELOPE_FILE` - Path to envelope projections CSV file (default: None)
 
 ## Data Format
 
@@ -94,11 +99,12 @@ Key variables in main script:
 - Additional data: ADP, actual draft results in `probability-models-draft/`
 - All data follows standardized format with 99.6% exact matching
 
-### Analytics Output Files (when envelope/analytics enabled)
-- `pick_candidates.csv` - Top candidates per pick with envelope metrics
-- `value_decay.csv` - Value dropoff analysis between consecutive picks
-- `pos_outlook.csv` - Positional availability trends across rounds
+### Analytics Output Files (when analytics enabled)
+- `pick_candidates.csv` - Top candidates per pick with availability probabilities and envelope metrics (if available)
+- `value_decay.csv` - Value dropoff analysis between consecutive picks by position
+- `pos_outlook.csv` - Positional availability trends across draft rounds
 - `run_metadata.json` - Execution metadata and file hashes for reproducibility
+- Standard Monte Carlo exports: `mc_config_*.csv`, `mc_player_survivals_*.csv`, `mc_position_summary_*.csv`
 
 ## Development Workflow
 
@@ -109,8 +115,48 @@ Key variables in main script:
 5. Run unit tests: `python scripts/tests/test_favorites.py` 
 6. Use notebooks only for visualization and analysis of CSV outputs
 
+## Enhanced Features
+
+### Decision Support Enhancements
+- **ε-Optimal Plans Menu**: Multiple draft strategies within 3.3% of optimal EV (configurable via EPSILON_THRESHOLD)
+- **Pick Regret Analysis**: Compares alternative position choices with regret percentages  
+- **Flexibility Index**: Entropy-based scoring (0.0-1.0) showing decision flexibility
+- **Time-to-Cliff Analysis**: Warns when positions face significant value drops
+- **Contingency Playbooks**: Primary/secondary/tertiary recommendations per pick
+- **Risk-Adjusted Variants**: Floor-focused and upside-focused strategies (requires envelope data)
+- **K-Best Path Exploration**: Configurable depth for alternative strategy discovery
+
+### Enhanced Output Sections
+1. **Draft Plan Menu**: Shows multiple viable strategies (e.g., "Plan A: RB-QB-RB-WR... EV 1380.9")
+2. **Per-Pick Analysis**: Regret tables, flexibility scores, cliff warnings, contingency trees
+3. **Risk Variants**: Conservative vs aggressive approaches when envelope data available
+
+### Sample Enhanced Output
+```
+=== DRAFT PLAN MENU (ε=3.3%) ===
+Plan A: RB-QB-RB-WR-RB-WR-TE    EV 1380.9  (baseline)
+Plan B: RB-WR-RB-WR-RB-QB-TE    EV 1374.1  (-0.5%, safer)
+Plan C: WR-RB-QB-WR-RB-WR-TE    EV 1370.2  (-0.8%, WR heavy)
+
+PICK 5 ANALYSIS
+Flexibility Index: 0.71 (many viable options)
+Windows: RB cliff in 1 pick, WR safe for 2 picks
+
+REGRET TABLE:
+Position    EV     Regret    Notes
+RB        380.9    0.0%     (optimal)
+WR        375.2   -1.5%     Strong alternative
+QB        365.1   -4.2%     Early but viable
+
+CONTINGENCY PLAYBOOK:
+🎯 PRIMARY: RB → Saquon Barkley, Jonathan Taylor
+📋 IF GONE: WR → CeeDee Lamb, Tyreek Hill (-1.5% EV)
+🔄 LAST RESORT: QB → Josh Allen, Lamar Jackson (-4.2% EV)
+```
+
 ## Current Project State
 
+- **Enhanced decision support**: Comprehensive draft-day analysis with multiple strategies and contingency planning
 - **Cleaned architecture**: Removed old simulation outputs and unused files
 - **Consolidated data**: All probability models in `data/probability-models-draft/`
 - **Simplified structure**: 3 focused Jupyter notebooks for analysis

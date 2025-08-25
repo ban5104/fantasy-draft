@@ -24,6 +24,57 @@ except ImportError:
 
 # Removed data_adapters import - using simplified file parameter system
 
+# ==============================================================================
+# CONFIGURATION - Modify these settings for your draft
+# ==============================================================================
+
+# --- YOUR DRAFT SETTINGS ---
+DRAFT_POSITION = 5  # Your position in the draft (1-14)
+LEAGUE_SIZE = 14  # Number of teams
+POSITION_LIMITS = {"RB": 3, "WR": 2, "QB": 1, "TE": 1}  # Roster requirements
+
+# --- DATA FILES ---
+DEFAULT_ESPN_FILE = "data/probability-models-draft/espn_algorithm_20250824.csv"
+RANKINGS_FILE = "data/rankings_top300_20250814.csv"
+ENVELOPE_FILE = None  # Set path for uncertainty analysis, or leave None
+
+# --- SIMULATION PARAMETERS ---
+RANDOMNESS_LEVEL = 0.3  # Draft chaos (0.1=predictable, 0.5=chaotic)
+CANDIDATE_POOL_SIZE = 25  # Top N players teams consider each pick
+SIMULATION_COUNTS = {"fast": 100, "stable": 5000, "debug": 1000}
+
+# --- STRATEGY OPTIONS ---
+EPSILON_THRESHOLD = 0.033  # Show strategies within this % of optimal (0.025 = 2.5%)
+K_BEST_DEPTH = 10  # Alternative paths to explore per pick (higher = more thorough but slower)
+# MIN_PLANS_SHOWN removed - wasn't actually being used
+
+# --- EXPORT SETTINGS ---
+USE_ANALYTICS = True  # Enable detailed analytics capture
+EXPORT_DIR = "data/output-simulations"
+EXPORT_FORMAT = "parquet"  # Falls back to CSV if parquet unavailable
+
+def calculate_snake_picks(position: int, league_size: int, num_rounds: int = 7) -> List[int]:
+    """Calculate snake draft pick numbers for a given position.
+    
+    Args:
+        position: Draft position (1-based, e.g., 1 for first pick)
+        league_size: Number of teams in league
+        num_rounds: Number of rounds to calculate
+        
+    Returns:
+        List of pick numbers for snake draft
+    """
+    picks = []
+    for round_num in range(1, num_rounds + 1):
+        if round_num % 2 == 1:  # Odd rounds go forward
+            pick = (round_num - 1) * league_size + position
+        else:  # Even rounds go backward
+            pick = round_num * league_size - position + 1
+        picks.append(pick)
+    return picks
+
+# Calculate SNAKE_PICKS from configuration
+SNAKE_PICKS = calculate_snake_picks(DRAFT_POSITION, LEAGUE_SIZE)
 
 # ==============================================================================
 # CORE DATA STRUCTURES - Player class and utility functions
@@ -93,25 +144,10 @@ def pos_sorted(players: list, position: str) -> list:
     )
 
 # ==============================================================================
-# CONFIGURATION - Adjust these parameters to control the simulation
+# ENVELOPE SUPPORT FUNCTIONS
 # ==============================================================================
 
-# Your draft picks in the snake draft (14-team league example)
-SNAKE_PICKS = [5, 24, 33, 52, 61, 80, 89]  # Update with your actual picks
-
-# Maximum roster slots you need to fill
-POSITION_LIMITS = {"RB": 3, "WR": 2, "QB": 1, "TE": 1}
-
-# ======= Envelope + Export Add-Ons (non-invasive) =======
-# Put near the top of your file (after numpy/pandas imports)
-
-ENVELOPE_FILE = ENVELOPE_FILE if "ENVELOPE_FILE" in globals() else None   # set a path or leave None
-USE_ENVELOPES = True
-EXPORT_DIR = "data/output-simulations"
-EXPORT_FORMAT = "parquet"  # falls back to csv automatically
-
 import os, json, hashlib, time, sys, platform
-import numpy as np, pandas as pd
 
 def _canon(s: str) -> str:
     s = (s or "").lower()
@@ -267,23 +303,8 @@ def _export_pick_run(meta_extra: dict | None = None):
         json.dump(meta, f, indent=2)
 
 # ==============================================================================
-# MONTE CARLO SIMULATION PARAMETERS - Control draft variability
+# MONTE CARLO SIMULATION - Global variables
 # ==============================================================================
-
-# RANDOMNESS_LEVEL: How much randomness in each pick (0.0 to 1.0)
-# - 0.1 = Very predictable, picks closely follow ESPN rankings
-# - 0.3 = Moderate variance (DEFAULT - realistic draft chaos)
-# - 0.5 = High variance, significant departures from rankings
-# - 0.7 = Extreme variance, very unpredictable draft
-RANDOMNESS_LEVEL = 0.3
-
-# CANDIDATE_POOL_SIZE: How many top players teams consider for each pick
-# - 5  = Very predictable, only top ranked players get picked
-# - 10 = Somewhat predictable
-# - 15 = Moderate flexibility (DEFAULT)
-# - 20 = High flexibility, reaches become more common
-# - 25 = Very flexible, significant reaches possible
-CANDIDATE_POOL_SIZE = 25
 
 # Note: This simulation uses pure ESPN rankings with noise
 # Teams pick best available players without position-based adjustments
@@ -307,17 +328,21 @@ CAPTURE_EXAMPLES = {
 # ==============================================================================
 
 
-def load_and_merge_data(espn_file: str = "data/probability-models-draft/espn_projections_20250814.csv") -> List[Player]:
+def load_and_merge_data(espn_file: str = None) -> List[Player]:
     """Load ESPN projections and fantasy points, merge via fuzzy matching.
     
     Args:
-        espn_file: Path to ESPN projections CSV file
+        espn_file: Path to ESPN projections CSV file (defaults to DEFAULT_ESPN_FILE)
         
     Returns:
         List of Player objects with merged data
     """
+    # Use default if not provided
+    if espn_file is None:
+        espn_file = DEFAULT_ESPN_FILE
+    
     # Validate required CSV files exist before attempting to load
-    points_file = "data/rankings_top300_20250814.csv"
+    points_file = RANKINGS_FILE
 
     if not os.path.exists(espn_file):
         logging.error(f"Required ESPN projections file not found: {espn_file}")
@@ -448,7 +473,7 @@ def load_and_merge_data(espn_file: str = "data/probability-models-draft/espn_pro
     
     # Apply envelope integration from paste-in update
     try:
-        if USE_ENVELOPES and ENVELOPE_FILE and os.path.exists(ENVELOPE_FILE):
+        if USE_ANALYTICS and ENVELOPE_FILE and os.path.exists(ENVELOPE_FILE):
             players_df["name_key"] = players_df["name"].map(_canon)
             env = _load_envelopes(ENVELOPE_FILE)
             players_df = players_df.merge(env[["name_key","low","proj","high"]], on="name_key", how="left")
@@ -881,7 +906,8 @@ def ladder_ev_debug(
         contribution = player.points * surv_prob * taken_prob
         expected_value += contribution
 
-        if contribution > 0.01 or j < slot + 2:
+        # Only show players with realistic chance (33%+) or meaningful contribution
+        if surv_prob >= 0.33 and contribution > 0.01:
             debug_info.append(
                 f"    {player.name}: {player.points:.1f}pts × {surv_prob:.2f}surv × {taken_prob:.2f}gone = {contribution:.1f}"
             )
@@ -1146,84 +1172,128 @@ def dp_optimize_k_best(
     return top_k if top_k else [(0.0, "", {})]
 
 
-def get_epsilon_optimal_plans(epsilon: float = 0.02) -> List[Dict]:
-    """Return all draft plans within epsilon of optimal."""
+def get_epsilon_optimal_plans(epsilon: float = None) -> List[Dict]:
+    """Return all draft plans within epsilon of optimal using K-best DP exploration."""
     try:
+        # Use global EPSILON_THRESHOLD if not specified
+        if epsilon is None:
+            epsilon = EPSILON_THRESHOLD
+            
         # Get baseline optimal plan
         baseline_value, baseline_pos = dp_optimize(0, 0, 0, 0, 0)
         baseline_sequence = get_sequence_for_plan_choice(0, 0, 0, 0, 0)
         
-        # Calculate threshold for epsilon-optimal plans
+        # Calculate threshold for epsilon-optimal plans  
         threshold = baseline_value * (1 - epsilon)
         
-        epsilon_plans = []
-        # Add baseline plan
-        epsilon_plans.append({
-            'label': 'A',
-            'sequence': baseline_sequence,
-            'total_value': baseline_value,
-            'regret_pct': 0.0,
-            'first_position': baseline_pos,
-            'description': '(baseline)'
-        })
+        # Use recursive exploration to find all epsilon-optimal sequences
+        all_sequences = explore_draft_sequences_kbest(0, 0, 0, 0, 0, threshold, k=K_BEST_DEPTH)
         
-        # Try different starting positions to generate alternative plans
-        plan_idx = 1
-        for alt_first_pos in ['WR', 'RB', 'QB', 'TE']:
-            if alt_first_pos != baseline_pos and POSITION_LIMITS[alt_first_pos] > 0:
-                # Simulate choosing this position first
-                counts = {"RB": 0, "WR": 0, "QB": 0, "TE": 0}
-                counts[alt_first_pos] = 1
-                
-                # Get EV for this first choice
-                ev_first, _ = ladder_ev_debug(
-                    alt_first_pos, SNAKE_PICKS[0], 1, PLAYERS, SURVIVAL_PROBS
-                )
-                
-                # Get optimal continuation from pick 2 onward
-                future_value, _ = dp_optimize(
-                    1, counts["RB"], counts["WR"], counts["QB"], counts["TE"]
-                )
-                
-                total_value = ev_first + future_value
-                
-                # Only include if within epsilon threshold
-                if total_value >= threshold:
-                    sequence = get_sequence_for_plan_choice(0, 0, 0, 0, 0, alt_first_pos)
-                    regret_pct = ((baseline_value - total_value) / baseline_value) * 100 if baseline_value > 0 else 0.0
-                    
-                    # Determine description based on strategy
-                    description = ""
-                    if regret_pct < 1.0:
-                        description = ", strong alternative"
-                    elif alt_first_pos == "WR":
-                        description = ", WR heavy"
-                    elif alt_first_pos == "QB":
-                        description = ", early QB"
-                    elif alt_first_pos == "TE":
-                        description = ", early TE"
-                    
-                    epsilon_plans.append({
-                        'label': chr(65 + plan_idx),
-                        'sequence': sequence,
-                        'total_value': total_value,
-                        'regret_pct': regret_pct,
-                        'first_position': alt_first_pos,
-                        'description': f"(-{regret_pct:.1f}%){description}"
-                    })
-                    plan_idx += 1
+        # Convert to plan format
+        epsilon_plans = []
+        seen_sequences = set()
+        
+        for total_value, sequence in all_sequences:
+            sequence_str = '-'.join(sequence)
+            if sequence_str in seen_sequences:
+                continue
+            seen_sequences.add(sequence_str)
+            
+            regret_pct = ((baseline_value - total_value) / baseline_value) * 100 if baseline_value > 0 else 0.0
+            
+            # Generate description
+            description = analyze_sequence_description(sequence, baseline_sequence, regret_pct)
+            
+            epsilon_plans.append({
+                'sequence': sequence,
+                'total_value': total_value,
+                'regret_pct': regret_pct,
+                'description': description
+            })
         
         # Sort by total value (best first)
         epsilon_plans.sort(key=lambda x: x['total_value'], reverse=True)
         
-        # Re-label after sorting
+        # Add labels (A-Z, then numbers)
         for i, plan in enumerate(epsilon_plans):
-            plan['label'] = chr(65 + i)
+            plan['label'] = chr(65 + i) if i < 26 else f"{i+1}"
         
-        return epsilon_plans[:5]  # Return top 5 plans
+        return epsilon_plans  # Return ALL plans within epsilon threshold
     except Exception as e:
         print(f"ERROR: Exception in get_epsilon_optimal_plans: {e}")
         return []
+
+
+def explore_draft_sequences_kbest(pick_idx: int, rb_count: int, wr_count: int, 
+                                  qb_count: int, te_count: int, threshold: float, k: int = 5) -> List[Tuple[float, List[str]]]:
+    """Recursively explore K-best options at each pick to find all epsilon-optimal sequences."""
+    
+    # Base case: draft complete
+    if pick_idx >= len(SNAKE_PICKS) or (rb_count == 3 and wr_count == 2 and qb_count == 1 and te_count == 1):
+        return [(0.0, [])]
+    
+    # Get K-best options at this pick
+    k_best = dp_optimize_k_best(pick_idx, rb_count, wr_count, qb_count, te_count, k=k)
+    
+    all_sequences = []
+    
+    for total_value, position, details in k_best:
+        if not position:  # Skip empty positions
+            continue
+            
+        # Only explore paths that could still reach threshold
+        if total_value < threshold:
+            continue
+        
+        # Update counts for this position
+        new_counts = {"RB": rb_count, "WR": wr_count, "QB": qb_count, "TE": te_count}
+        new_counts[position] += 1
+        
+        # Recursively explore from next pick
+        future_sequences = explore_draft_sequences_kbest(
+            pick_idx + 1,
+            new_counts["RB"], new_counts["WR"], new_counts["QB"], new_counts["TE"],
+            threshold - details.get('ev', 0),  # Adjust threshold for remaining picks
+            k=k
+        )
+        
+        # Combine current position with future sequences
+        for future_value, future_seq in future_sequences:
+            full_sequence = [position] + future_seq
+            full_value = details.get('ev', 0) + future_value
+            all_sequences.append((full_value, full_sequence))
+    
+    return all_sequences
+
+
+def analyze_sequence_description(sequence: List[str], baseline: List[str], regret_pct: float) -> str:
+    """Generate a meaningful description for a draft sequence."""
+    if sequence == baseline:
+        return "(baseline)"
+    
+    description_parts = []
+    
+    # Add regret level
+    if regret_pct <= 0.5:
+        description_parts.append(f"(-{regret_pct:.1f}%)")
+    elif regret_pct <= 2.5:
+        description_parts.append(f"(-{regret_pct:.1f}%)")
+    else:
+        description_parts.append(f"(-{regret_pct:.1f}%)")
+    
+    # Find key differences from baseline
+    differences = []
+    for i, (seq_pos, base_pos) in enumerate(zip(sequence, baseline)):
+        if seq_pos != base_pos:
+            round_num = i + 1
+            differences.append(f"R{round_num}:{seq_pos}")
+    
+    if len(differences) <= 3:
+        description_parts.append(f"swaps: {', '.join(differences)}")
+    elif sequence[0] != baseline[0]:
+        description_parts.append(f"{sequence[0]} start")
+    
+    return ", ".join(description_parts) if description_parts else ""
 
 
 def get_sequence_for_plan_choice(pick_idx: int, rb_count: int, wr_count: int, qb_count: int, te_count: int, forced_position: str = None) -> List[str]:
@@ -1256,13 +1326,17 @@ def get_sequence_for_plan_choice(pick_idx: int, rb_count: int, wr_count: int, qb
     return sequence
 
 
-def show_plan_menu(epsilon_plans: List[Dict]):
+def show_plan_menu(epsilon_plans: List[Dict], epsilon: float = None):
     """Display the draft plan menu with epsilon-optimal alternatives."""
     if not epsilon_plans:
         return
+    
+    # Use global EPSILON_THRESHOLD if not specified    
+    if epsilon is None:
+        epsilon = EPSILON_THRESHOLD
         
     print(f"\n{'='*60}")
-    print(f"DRAFT PLAN MENU (ε=2.0%)")
+    print(f"DRAFT PLAN MENU (ε={epsilon*100:.1f}%)")
     print(f"{'='*60}")
     
     for plan in epsilon_plans:
@@ -1714,7 +1788,7 @@ def show_position_players(pos: str, recommended_pos: str, available_players: Lis
             })
     
     # Record candidates if this is the recommended position and we have analytics enabled
-    if USE_ENVELOPES and pos == recommended_pos and pick_number is not None and candidate_rows:
+    if USE_ANALYTICS and pos == recommended_pos and pick_number is not None and candidate_rows:
         _record_candidates(pick_number, pos, candidate_rows)
     
     print()
@@ -1859,7 +1933,7 @@ def show_positional_outlook(pos: str, counts: Dict[str, int], pick_number: int, 
     print()
     
     # Analytics data capture (if enabled) - using new recording function
-    if USE_ENVELOPES:  # Only capture if envelopes enabled (as per original feedback)
+    if USE_ANALYTICS:  # Only capture if analytics enabled (as per original feedback)
         # Record all candidates shown for all pick windows
         for pick in all_picks:
             if pick >= survival_matrix.shape[1]:
@@ -2011,7 +2085,7 @@ def show_value_decay_analysis(pick_idx: int, counts: Dict[str, int]):
             print()
     
     # Analytics data capture (if enabled) - using new recording function
-    if USE_ENVELOPES:  # Only capture if envelopes enabled (as per original feedback)
+    if USE_ANALYTICS:  # Only capture if analytics enabled (as per original feedback)
         for p in position_decays:
             if p['pct_drops'] and len(p['pct_drops']) > 0:
                 # Record current vs next pick decay
@@ -2190,7 +2264,7 @@ def get_top_available_players(pos: str, pick_number: int, n: int = 3) -> List:
             break
             
         survival_prob = survival_matrix[i, pick_number]
-        if survival_prob >= 0.3:  # 30% chance or better
+        if survival_prob >= 0.7:  # 70% chance or better for reliable contingency
             available_players.append(player)
             if len(available_players) >= n:
                 break
@@ -2433,8 +2507,8 @@ def main():
     parser.add_argument(
         "--espn-file", 
         type=str,
-        default="data/probability-models-draft/espn_projections_20250814.csv",
-        help="Path to ESPN projections CSV file (default: data/probability-models-draft/espn_projections_20250814.csv)"
+        default=DEFAULT_ESPN_FILE,
+        help=f"Path to ESPN projections CSV file (default: {DEFAULT_ESPN_FILE})"
     )
     parser.add_argument(
         "--enhanced-stats",
@@ -2459,20 +2533,20 @@ def main():
     args = parser.parse_args()
 
     # Apply command-line overrides
-    global RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE, USE_ENVELOPES, EXPORT_FORMAT, ENVELOPE_FILE
+    global RANDOMNESS_LEVEL, CANDIDATE_POOL_SIZE, USE_ANALYTICS, EXPORT_FORMAT, ENVELOPE_FILE
 
     # Handle preset modes
     if args.mode:
         if args.mode == "fast":
-            args.sims = 100
+            args.sims = SIMULATION_COUNTS["fast"]
             args.debug = False
             RANDOMNESS_LEVEL = 0.3
         elif args.mode == "stable":
-            args.sims = 5000
+            args.sims = SIMULATION_COUNTS["stable"]
             args.export_csv = True
             RANDOMNESS_LEVEL = 0.3
         elif args.mode == "debug":
-            args.sims = 1000
+            args.sims = SIMULATION_COUNTS["debug"]
             args.debug = True
             args.visualize = True
             args.enhanced_stats = True
@@ -2489,8 +2563,8 @@ def main():
     
     # Apply new analytics flags (following exact feedback structure)
     if args.capture_analytics:
-        USE_ENVELOPES = True  # Enable analytics capture via envelopes flag
-        print("Analytics data capture enabled (via USE_ENVELOPES)")
+        USE_ANALYTICS = True  # Enable analytics capture via analytics flag
+        print("Analytics data capture enabled (via USE_ANALYTICS)")
     
     if args.export_parquet:
         EXPORT_FORMAT = "parquet"
@@ -2498,7 +2572,7 @@ def main():
     
     if args.envelope_file:
         ENVELOPE_FILE = args.envelope_file
-        USE_ENVELOPES = True
+        USE_ANALYTICS = True
         print(f"Envelope projections enabled: {ENVELOPE_FILE}")
 
     # Clear capture examples and analytics data for fresh run
@@ -2621,8 +2695,8 @@ def main():
     total_value, _ = dp_optimize(0, 0, 0, 0, 0)
 
     # Display epsilon-optimal plans menu first
-    epsilon_plans = get_epsilon_optimal_plans(epsilon=0.02)
-    show_plan_menu(epsilon_plans)
+    epsilon_plans = get_epsilon_optimal_plans()  # Uses EPSILON_THRESHOLD
+    show_plan_menu(epsilon_plans)  # Uses EPSILON_THRESHOLD
 
     # Display results
     print("\n" + "=" * 50)
@@ -2668,7 +2742,7 @@ def main():
             print(f"Pick {pick:2d}: {position}{player_info}")
             
             # Analytics capture for FINAL optimal strategy (not intermediate analysis)
-            if USE_ENVELOPES and position and likely_player:
+            if USE_ANALYTICS and position and likely_player:
                 # Get top candidates for this optimal position
                 top_candidates = []
                 for j, player in enumerate(pos_players[:5]):  # Top 5 candidates
@@ -2696,7 +2770,7 @@ def main():
     print("─" * 60)
     
     # Add risk variants if envelope data is available
-    if USE_ENVELOPES and hasattr(players[0] if players else None, 'low') and hasattr(players[0] if players else None, 'high'):
+    if USE_ANALYTICS and hasattr(players[0] if players else None, 'low') and hasattr(players[0] if players else None, 'high'):
         show_risk_variants(players, player_survival)
     
     # Export analytics data if enabled

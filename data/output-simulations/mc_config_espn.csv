@@ -1,2 +1,2 @@
 num_simulations,snake_picks,position_limits,export_timestamp,total_players,randomness_level,candidate_pool_size,data_source,seed,enhanced_stats
-5000,"[5, 24, 33, 52, 61, 80, 89]","{'RB': 3, 'WR': 2, 'QB': 1, 'TE': 1}",2025-08-24T17:55:11.759713,260,0.3,25,espn,None,False
+5000,"[5, 24, 33, 52, 61, 80, 89]","{'RB': 3, 'WR': 2, 'QB': 1, 'TE': 1}",2025-08-25T17:32:25.005929,192,0.3,25,espn,42,False
